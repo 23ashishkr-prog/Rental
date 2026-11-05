@@ -12,6 +12,7 @@ export default async function MorePage() {
     ? [
         { href: "/confirmations", label: "Pending confirmations", hint: pending ? `${pending} waiting` : "None waiting" },
         { href: "/report", label: "Monthly report", hint: "Balances and CSV export" },
+        { href: "/profit", label: "Profit by flat", hint: "Collection, expenses, and net" },
         { href: "/tenants", label: "Invite a tenant", hint: "Email login for one flat" },
         { href: "/account", label: "Account", hint: actor.email },
       ]

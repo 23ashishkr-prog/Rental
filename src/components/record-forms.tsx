@@ -5,31 +5,47 @@ import { saveExpenseAction, saveAdjustmentAction, inviteTenantAction } from "@/s
 import { changePasswordAction } from "@/server/auth-actions";
 import { Field, FormMessage, controlClass } from "@/components/ui-bits";
 import { SubmitButton } from "@/components/submit-button";
+import { EXPENSE_CATEGORIES } from "@/lib/categories";
 import type { ExpenseRecord, FlatRecord } from "@/lib/types";
 
-const categories = ["Maintenance", "Staff", "Utilities", "Repairs", "Housekeeping", "Tax", "Other"];
-
-export function ExpenseForm({ expense, today }: { expense?: ExpenseRecord; today: string }) {
+export function ExpenseForm({
+  expense,
+  today,
+  flats,
+}: {
+  expense?: ExpenseRecord;
+  today: string;
+  flats: { id: number; unitNumber: string; active: boolean }[];
+}) {
   const [state, action] = useActionState(saveExpenseAction, null);
+  const known = new Set<string>(EXPENSE_CATEGORIES);
+  const current = expense?.category?.trim() ?? "";
+  const categories = current && !known.has(current) ? [current, ...EXPENSE_CATEGORIES] : [...EXPENSE_CATEGORIES];
   return (
     <form action={action} className="space-y-4">
       {expense ? <input type="hidden" name="id" value={expense.id} /> : null}
       <Field label="Title" htmlFor="title">
         <input id="title" name="title" required defaultValue={expense?.title ?? ""} className={controlClass} />
       </Field>
-      <Field label="Category" htmlFor="category">
-        <input
-          id="category"
-          name="category"
-          list="expense-categories"
-          defaultValue={expense?.category ?? ""}
-          className={controlClass}
-        />
-        <datalist id="expense-categories">
-          {categories.map((category) => (
-            <option key={category} value={category} />
+      <Field label="Flat" htmlFor="flat_id" hint="Leave this as general overhead for staff salary and other costs that are not one flat.">
+        <select id="flat_id" name="flat_id" defaultValue={expense?.flatId ? String(expense.flatId) : ""} className={controlClass}>
+          <option value="">General overhead</option>
+          {flats.map((flat) => (
+            <option key={flat.id} value={flat.id}>
+              {flat.unitNumber}
+              {flat.active ? "" : " (inactive)"}
+            </option>
           ))}
-        </datalist>
+        </select>
+      </Field>
+      <Field label="Category" htmlFor="category" hint="Personal is left out of the business profit report unless you include it there.">
+        <select id="category" name="category" defaultValue={expense?.category || "Other"} className={controlClass}>
+          {categories.map((category) => (
+            <option key={category} value={category}>
+              {category}
+            </option>
+          ))}
+        </select>
       </Field>
       <Field label="Amount (₹)" htmlFor="amount">
         <input

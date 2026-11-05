@@ -59,7 +59,18 @@ function flatFromForm(formData: FormData): FlatInput {
     monthlyRent: roundMoney(rentValue),
     rentStartDate: readOptionalDate(formData, "rent_start_date"),
     active,
+    openingBalance: readOpeningBalance(formData),
   };
+}
+
+function readOpeningBalance(formData: FormData): number {
+  const raw = readString(formData, "opening_balance").replace(/[₹,\s]/g, "");
+  if (!raw) return 0;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) throw new AppError("Enter an opening balance, or leave it blank.");
+  const rounded = roundMoney(value);
+  if (Math.abs(rounded) > 10_000_000) throw new AppError("That opening balance is too large.");
+  return rounded;
 }
 
 function paymentFromForm(formData: FormData, fallbackStatus: PaymentInput["status"]): PaymentInput {
@@ -81,12 +92,21 @@ function paymentFromForm(formData: FormData, fallbackStatus: PaymentInput["statu
 function expenseFromForm(formData: FormData): ExpenseInput {
   const title = clip(readString(formData, "title"), 120);
   if (!title) throw new AppError("Enter a title for the expense.");
+  const flatRaw = readString(formData, "flat_id");
+  let flatId: number | null = null;
+  if (flatRaw) {
+    const parsed = Number(flatRaw);
+    if (!Number.isInteger(parsed) || parsed <= 0) throw new AppError("Choose a valid flat.");
+    flatId = parsed;
+  }
+  const category = clip(readString(formData, "category"), 40);
   return {
     title,
-    category: emptyToNull(clip(readString(formData, "category"), 40)),
+    category: category || "Other",
     amount: readAmount(formData),
     expenseDate: readDate(formData, "expense_date", "expense date"),
     notes: emptyToNull(clip(readString(formData, "notes"), 2000)),
+    flatId,
   };
 }
 
@@ -100,10 +120,14 @@ export async function saveFlatAction(_prev: FormState, formData: FormData): Prom
       await updateFlat(actor, id, input);
       revalidatePath("/flats");
       revalidatePath(`/flats/${id}`);
+      revalidatePath("/");
+      revalidatePath("/profit");
       redirect(`/flats/${id}`);
     }
     const id = await insertFlat(actor, input);
     revalidatePath("/flats");
+    revalidatePath("/");
+    revalidatePath("/profit");
     redirect(`/flats/${id}`);
   } catch (error) {
     return actionError(error);
@@ -136,6 +160,7 @@ export async function savePaymentAction(_prev: FormState, formData: FormData): P
     }
     revalidatePath("/payments");
     revalidatePath("/");
+    revalidatePath("/profit");
     revalidatePath(`/flats/${input.flatId}`);
     revalidatePath("/confirmations");
     redirect(`/flats/${input.flatId}`);
@@ -204,6 +229,7 @@ export async function saveExpenseAction(_prev: FormState, formData: FormData): P
     else await insertExpense(actor, input);
     revalidatePath("/expenses");
     revalidatePath("/");
+    revalidatePath("/profit");
     redirect("/expenses");
   } catch (error) {
     return actionError(error);
@@ -215,6 +241,7 @@ export async function deleteExpenseAction(formData: FormData): Promise<void> {
   await deleteExpense(actor, readId(formData));
   revalidatePath("/expenses");
   revalidatePath("/");
+  revalidatePath("/profit");
   redirect("/expenses");
 }
 
@@ -230,6 +257,7 @@ export async function saveAdjustmentAction(_prev: FormState, formData: FormData)
     });
     revalidatePath(`/flats/${flatId}`);
     revalidatePath("/");
+    revalidatePath("/profit");
     redirect(`/flats/${flatId}`);
   } catch (error) {
     return actionError(error);
@@ -241,6 +269,7 @@ export async function deleteAdjustmentAction(formData: FormData): Promise<void> 
   const flatId = await deleteAdjustment(actor, readId(formData));
   revalidatePath(`/flats/${flatId ?? ""}`);
   revalidatePath("/");
+  revalidatePath("/profit");
   redirect(flatId ? `/flats/${flatId}` : "/flats");
 }
 

@@ -3,8 +3,10 @@ import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { loadSnapshot } from "@/lib/portfolio";
 import { currentMonthKey, formatDate, formatMonth } from "@/lib/dates";
-import { formatINR } from "@/lib/money";
-import { pendingLabel } from "@/lib/rent";
+import { formatINR, roundMoney } from "@/lib/money";
+import { isPersonalCategory } from "@/lib/categories";
+import { expenseFlatColumnExists, queryExpenses } from "@/lib/queries";
+import { monthStanding, pendingLabel, type SettledBefore } from "@/lib/rent";
 import { reminderText } from "@/lib/reminders";
 import { whatsAppHref } from "@/lib/upi";
 import { notice, one } from "@/lib/search";
@@ -31,6 +33,20 @@ export default async function FlatDetailPage({
   const month = currentMonthKey();
   const snapshot = await loadSnapshot(actor, flatId, month);
   if (!snapshot) notFound();
+  const standing = monthStanding(snapshot.ledger, month);
+  const expenses = actor.isAdmin ? await queryExpenses(actor, { flatId, limit: null }) : [];
+  const expensesLinked = actor.isAdmin ? await expenseFlatColumnExists() : false;
+  const year = month.slice(0, 4);
+  const yearExpenses = expenses.filter(
+    (expense) => expense.expenseDate.startsWith(year) && !isPersonalCategory(expense.category),
+  );
+  const yearCollected = roundMoney(
+    snapshot.ledger.months
+      .filter((row) => row.month.startsWith(year))
+      .reduce((sum, row) => sum + row.paid, 0),
+  );
+  const yearExpenseTotal = roundMoney(yearExpenses.reduce((sum, expense) => sum + expense.amount, 0));
+  const yearProfit = roundMoney(yearCollected - yearExpenseTotal);
   const query = await searchParams;
   const error = notice(query.error);
   const invited = one(query.invited) === "1";
@@ -103,42 +119,149 @@ export default async function FlatDetailPage({
         {snapshot.rentStartDate ? ` · Rent from ${formatDate(snapshot.rentStartDate)}` : " · Rent start date not set"}
       </p>
 
+      <section className="grid grid-cols-2 gap-3">
+        <div className="rounded-2xl bg-card p-4 ring-1 ring-foreground/10">
+          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">This month</p>
+          <p className={`font-display mt-1 text-2xl font-semibold ${standing.status === "paid" ? "text-teal-800" : standing.status === "none" ? "" : "text-amber-800"}`}>
+            {standing.status === "paid"
+              ? "Paid"
+              : standing.status === "partial"
+                ? `Partial ${formatINR(standing.remaining)}`
+                : standing.status === "due"
+                  ? `Due ${formatINR(standing.remaining)}`
+                  : "No charge"}
+          </p>
+        </div>
+        <div className="rounded-2xl bg-card p-4 ring-1 ring-foreground/10">
+          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Earlier arrears</p>
+          <p className="font-display mt-1 text-2xl font-semibold">{formatINR(standing.arrears)}</p>
+        </div>
+      </section>
+
       <section>
         <h2 className="mb-3 font-display text-xl font-semibold">Ledger</h2>
-        {snapshot.ledger.months.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No rent has accrued yet.</p>
-        ) : (
-          <div className="overflow-x-auto rounded-2xl bg-card ring-1 ring-foreground/10">
-            <table className="w-full min-w-[640px] text-left text-sm">
-              <thead className="text-xs tracking-wide text-muted-foreground uppercase">
-                <tr>
-                  <th className="px-3 py-3 font-medium">Month</th>
-                  <th className="px-3 py-3 font-medium">Charge</th>
-                  <th className="px-3 py-3 font-medium">Paid</th>
-                  <th className="px-3 py-3 font-medium">Balance</th>
-                </tr>
-              </thead>
-              <tbody>
-                {snapshot.ledger.months.map((row) => (
-                  <tr key={row.month} className="border-t border-foreground/10">
-                    <td className="px-3 py-3">
-                      {formatMonth(row.month)}
-                      {row.adjustment !== 0 ? (
-                        <span className="mt-0.5 block text-xs text-muted-foreground">
-                          Adjustment {formatINR(row.adjustment)}
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className="px-3 py-3">{formatINR(row.charge)}</td>
-                    <td className="px-3 py-3">{formatINR(row.paid)}</td>
-                    <td className="px-3 py-3 font-medium">{formatINR(row.closing)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {snapshot.ledger.settledBefore || snapshot.ledger.months.length > 0 ? (
+          <div className="space-y-2 md:hidden">
+            {snapshot.ledger.settledBefore ? <SettledCard settled={snapshot.ledger.settledBefore} /> : null}
+            {snapshot.ledger.months.map((row) => (
+              <article key={row.month} className="rounded-2xl bg-card p-4 ring-1 ring-foreground/10">
+                <p className="font-semibold">{formatMonth(row.month)}</p>
+                <dl className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <dt className="text-muted-foreground">Due</dt>
+                    <dd>{formatINR(row.charge)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">Paid</dt>
+                    <dd>{formatINR(row.paid)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">Carried in</dt>
+                    <dd>{formatINR(row.opening)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">Balance</dt>
+                    <dd className="font-medium">{formatINR(row.closing)}</dd>
+                  </div>
+                </dl>
+              </article>
+            ))}
           </div>
+        ) : (
+          <p className="text-sm text-muted-foreground md:hidden">No rent has accrued yet.</p>
         )}
+        <div className="hidden overflow-x-auto rounded-2xl bg-card ring-1 ring-foreground/10 md:block">
+          <table className="w-full min-w-[640px] text-left text-sm">
+            <thead className="text-xs tracking-wide text-muted-foreground uppercase">
+              <tr>
+                <th className="px-3 py-3 font-medium">Month</th>
+                <th className="px-3 py-3 font-medium">Due</th>
+                <th className="px-3 py-3 font-medium">Paid</th>
+                <th className="px-3 py-3 font-medium">Carried</th>
+                <th className="px-3 py-3 font-medium">Balance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {snapshot.ledger.settledBefore ? (
+                <tr className="border-t border-foreground/10 bg-teal-50/80">
+                  <td className="px-3 py-3">
+                    <span className="font-medium text-teal-900">{snapshot.ledger.settledBefore.label}</span>
+                    <span className="mt-0.5 block text-xs text-teal-800">
+                      {formatMonth(snapshot.ledger.settledBefore.fromMonth)} – {formatMonth(snapshot.ledger.settledBefore.throughMonth)}
+                      {" · "}
+                      {snapshot.ledger.settledBefore.monthCount} months
+                    </span>
+                  </td>
+                  <td className="px-3 py-3">{formatINR(snapshot.ledger.settledBefore.amount)}</td>
+                  <td className="px-3 py-3">{formatINR(snapshot.ledger.settledBefore.amount)}</td>
+                  <td className="px-3 py-3">{formatINR(0)}</td>
+                  <td className="px-3 py-3 font-medium">{formatINR(0)}</td>
+                </tr>
+              ) : null}
+              {snapshot.ledger.months.map((row) => (
+                <tr key={row.month} className="border-t border-foreground/10">
+                  <td className="px-3 py-3">
+                    {formatMonth(row.month)}
+                    {row.adjustment !== 0 ? (
+                      <span className="mt-0.5 block text-xs text-muted-foreground">
+                        Adjustment {formatINR(row.adjustment)}
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-3">{formatINR(row.charge)}</td>
+                  <td className="px-3 py-3">{formatINR(row.paid)}</td>
+                  <td className="px-3 py-3">{formatINR(row.opening)}</td>
+                  <td className="px-3 py-3 font-medium">{formatINR(row.closing)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
+
+      {actor.isAdmin ? (
+        <section>
+          <h2 className="mb-3 font-display text-xl font-semibold">This flat&apos;s profit, {year}</h2>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="rounded-2xl bg-card p-3 ring-1 ring-foreground/10">
+              <p className="text-[0.7rem] font-semibold tracking-wide text-muted-foreground uppercase">Collected</p>
+              <p className="font-display mt-1 text-lg font-semibold">{formatINR(yearCollected)}</p>
+            </div>
+            <div className="rounded-2xl bg-card p-3 ring-1 ring-foreground/10">
+              <p className="text-[0.7rem] font-semibold tracking-wide text-muted-foreground uppercase">Expenses</p>
+              <p className="font-display mt-1 text-lg font-semibold">{formatINR(yearExpenseTotal)}</p>
+            </div>
+            <div className="rounded-2xl bg-card p-3 ring-1 ring-foreground/10">
+              <p className="text-[0.7rem] font-semibold tracking-wide text-muted-foreground uppercase">Net</p>
+              <p className={`font-display mt-1 text-lg font-semibold ${yearProfit >= 0 ? "text-teal-800" : "text-amber-800"}`}>
+                {formatINR(yearProfit)}
+              </p>
+            </div>
+          </div>
+          {!expensesLinked ? (
+            <p className="mt-3 text-sm text-muted-foreground">
+              Link expenses to this flat by running migrations/002_expense_flat.sql. Until then, profit here is rent collected only.
+            </p>
+          ) : yearExpenses.length === 0 ? (
+            <p className="mt-3 text-sm text-muted-foreground">No business expenses are linked to this flat in {year}. Personal expenses are left out.</p>
+          ) : (
+            <ul className="mt-3 space-y-2">
+              {yearExpenses.map((expense) => (
+                <li key={expense.id} className="flex items-center justify-between gap-3 rounded-2xl bg-card px-4 py-3 text-sm ring-1 ring-foreground/10">
+                  <span>
+                    {expense.title}
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      {formatDate(expense.expenseDate)}
+                      {expense.category ? ` · ${expense.category}` : ""}
+                    </span>
+                  </span>
+                  <span className="font-medium">{formatINR(expense.amount)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : null}
 
       <section>
         <h2 className="mb-3 font-display text-xl font-semibold">Payments</h2>
@@ -217,5 +340,17 @@ export default async function FlatDetailPage({
         </section>
       ) : null}
     </div>
+  );
+}
+
+function SettledCard({ settled }: { settled: SettledBefore }) {
+  return (
+    <article className="rounded-2xl bg-teal-50 p-4 text-teal-950 ring-1 ring-teal-200">
+      <p className="font-semibold">{settled.label}</p>
+      <p className="mt-1 text-sm">
+        {formatMonth(settled.fromMonth)} – {formatMonth(settled.throughMonth)} · {settled.monthCount} month
+        {settled.monthCount === 1 ? "" : "s"} treated as paid. Balance carried forward {formatINR(0)}.
+      </p>
+    </article>
   );
 }

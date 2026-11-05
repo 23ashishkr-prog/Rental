@@ -32,7 +32,21 @@ ALTER TABLE public.app_users
   ADD COLUMN IF NOT EXISTS password_set_at timestamptz;
 ```
 
-The same script is in `migrations/001_app_users_password.sql`. Do not drop, truncate, or rebuild the existing tables. Further schema changes, if any, should be new additive files in `migrations/`.
+The same script is in `migrations/001_app_users_password.sql`. Do not drop, truncate, or rebuild the existing tables.
+
+Two later migrations are also additive. Run them once in the Neon SQL editor when you want flat profit and an optional opening balance:
+
+```sql
+ALTER TABLE public.expenses
+  ADD COLUMN IF NOT EXISTS flat_id bigint REFERENCES public.flats (id);
+
+ALTER TABLE public.flats
+  ADD COLUMN IF NOT EXISTS opening_balance numeric(12,2) NOT NULL DEFAULT 0;
+```
+
+`flat_id` empty means a general cost (staff salary, for example). `opening_balance` defaults to 0. The same statements are in `migrations/002_expense_flat.sql` and `migrations/003_flat_opening_balance.sql`.
+
+`LEDGER_START_DATE` (default `2026-04-01`) is the first month rent can be charged. Each flat starts at the later of that month and its `rent_start_date`. Months from `rent_start_date` through the month before it are shown as one line, **Paid (before Apr 2026)**, and are not pending. No payment rows are inserted for that history. Set `LEDGER_START_DATE` in Vercel only if the books should open on a different month.
 
 ```bash
 npm test
@@ -73,7 +87,8 @@ Authorization is applied in the server queries, not only in the UI.
 For each flat, full `monthly_rent` is charged from the month of `rent_start_date` through the month you are viewing (dates in Asia/Kolkata). There is no mid-month proration.
 
 - A `rent_adjustments` row adds to that month (negative amount is a discount or waiver).
-- A **confirmed** payment counts toward `payments.for_month`. Older rows with an empty `for_month` count toward the `payment_date` month.
+- A **confirmed** payment counts toward `payments.for_month`. Older rows with an empty `for_month` count toward the `payment_date` month. A blank status counts as confirmed.
+- Months before `LEDGER_START_DATE` are treated as fully paid. The balance at the first charged month is `opening_balance` (0 unless you set one).
 - Pending and rejected payments do not reduce the balance.
 - Unpaid balance carries into the next month. An overpayment carries as credit. A payment tagged to a **future** month is advance and does not reduce what is due through the month on screen.
 - Pending months is how many charged months are still uncovered after that carry-forward. A partly covered month counts as pending.
@@ -98,6 +113,6 @@ No extra auth provider, database host, or cron job is required.
 ## Scripts
 
 - `npm run dev` — local app
-- `npm test` — rent math, Gmail admin matching, and the UPI link
+- `npm test` — rent math, books-open date, profit, Gmail admin matching, and the UPI link
 - `npm run build` — production build
 - `npm run lint` — ESLint

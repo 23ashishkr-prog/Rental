@@ -39,7 +39,20 @@ export function FlatForm({ flat }: { flat?: FlatRecord }) {
           className={controlClass}
         />
       </Field>
-      <Field label="Rent start date" htmlFor="rent_start_date" hint="Rent is charged from this month onward. Leave blank if it has not started.">
+      <Field
+        label="Opening balance (₹)"
+        htmlFor="opening_balance"
+        hint="Prior dues at the books-open month. Leave 0 when months before that are already paid. Negative is a credit."
+      >
+        <input
+          id="opening_balance"
+          name="opening_balance"
+          inputMode="decimal"
+          defaultValue={flat ? String(flat.openingBalance) : "0"}
+          className={controlClass}
+        />
+      </Field>
+      <Field label="Rent start date" htmlFor="rent_start_date" hint="Rent is charged from this month, or from the books-open month if this date is earlier. Months before the books open are shown as already paid.">
         <input
           id="rent_start_date"
           name="rent_start_date"
