@@ -38,6 +38,29 @@ test("profit ignores months before the books open and excludes personal costs", 
   assert.equal(report.categories.some((category) => category.category === "Personal"), false);
 });
 
+test("profit due uses the rent in force for each month", () => {
+  const report = buildProfitReport({
+    year: 2026,
+    today: "2026-05-10",
+    includePersonal: false,
+    flats: [
+      {
+        id: 1,
+        unitNumber: "1",
+        tenantName: null,
+        monthlyRent: 10000,
+        rentStartDate: "2026-04-01",
+        active: true,
+        rentChanges: [{ effectiveMonth: "2026-05-01", monthlyRent: 15000 }],
+      },
+    ],
+    payments: [],
+    adjustments: [],
+    expenses: [],
+  });
+  assert.equal(report.flats[0].due, 25000);
+});
+
 test("a flat under 80% collected is flagged", () => {
   const report = buildProfitReport({
     year: 2026,

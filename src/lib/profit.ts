@@ -24,6 +24,7 @@ export type ProfitFlatInput = {
   rentStartDate: string | null;
   active: boolean;
   openingBalance?: number;
+  rentChanges?: { effectiveMonth: string; monthlyRent: number }[];
 };
 
 export type ProfitPaymentInput = {
@@ -164,6 +165,7 @@ export function buildProfitReport(input: {
       monthlyRent: flat.monthlyRent,
       rentStartDate: flat.rentStartDate,
       openingBalance: flat.openingBalance,
+      rentChanges: flat.rentChanges,
       asOfMonth: asOf,
       adjustments: input.adjustments.filter((item) => item.flatId === flat.id),
       payments: input.payments.filter((item) => item.flatId === flat.id),

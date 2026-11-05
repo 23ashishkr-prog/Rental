@@ -1,13 +1,14 @@
 import "server-only";
 import { buildLedger, type Ledger } from "./rent";
 import { roundMoney } from "./money";
-import { queryAdjustments, queryFlats, queryPayments } from "./queries";
-import type { Actor, AdjustmentRecord, FlatRecord, PaymentRecord } from "./types";
+import { queryAdjustments, queryFlats, queryPayments, queryRentChanges } from "./queries";
+import type { Actor, AdjustmentRecord, FlatRecord, PaymentRecord, RentChangeRecord } from "./types";
 
 export type FlatSnapshot = FlatRecord & {
   ledger: Ledger;
   payments: PaymentRecord[];
   adjustments: AdjustmentRecord[];
+  rentChanges: RentChangeRecord[];
   lastPayment: PaymentRecord | null;
   awaiting: number;
 };
@@ -20,18 +21,24 @@ export async function loadSnapshots(
   const flats = await queryFlats(actor, opts);
   if (flats.length === 0) return [];
   const ids = flats.map((flat) => flat.id);
-  const [payments, adjustments] = await Promise.all([
+  const [payments, adjustments, rentChanges] = await Promise.all([
     queryPayments(actor, { flatIds: ids, limit: null }),
     queryAdjustments(actor, ids),
+    queryRentChanges(actor, ids),
   ]);
 
   return flats.map((flat) => {
     const flatPayments = payments.filter((payment) => payment.flatId === flat.id);
     const flatAdjustments = adjustments.filter((adjustment) => adjustment.flatId === flat.id);
+    const flatChanges = rentChanges.filter((change) => change.flatId === flat.id);
     const ledger = buildLedger({
       monthlyRent: flat.monthlyRent,
       rentStartDate: flat.rentStartDate,
       openingBalance: flat.openingBalance,
+      rentChanges: flatChanges.map((change) => ({
+        effectiveMonth: change.effectiveMonth,
+        monthlyRent: change.monthlyRent,
+      })),
       asOfMonth,
       adjustments: flatAdjustments.map((adjustment) => ({
         month: adjustment.month,
@@ -58,6 +65,7 @@ export async function loadSnapshots(
       ledger,
       payments: flatPayments,
       adjustments: flatAdjustments,
+      rentChanges: flatChanges,
       lastPayment,
       awaiting,
     };

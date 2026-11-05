@@ -2,7 +2,7 @@ import Link from "next/link";
 import { requireAdmin } from "@/lib/auth";
 import { formatMonthShort, parseYearParam, todayIST } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
-import { expenseFlatColumnExists, queryAdjustments, queryExpenses, queryFlats, queryPayments } from "@/lib/queries";
+import { expenseFlatColumnExists, queryAdjustments, queryExpenses, queryFlats, queryPayments, queryRentChanges } from "@/lib/queries";
 import { buildProfitReport, formatRate, type ProfitReport } from "@/lib/profit";
 import { one } from "@/lib/search";
 import { PageHeader, Stat, buttonLinkClass } from "@/components/ui-bits";
@@ -34,16 +34,23 @@ export default async function ProfitPage({
   }
 
   const flats = await queryFlats(actor, { active: "all" });
-  const [payments, adjustments, expenses] = await Promise.all([
+  const flatIds = flats.map((flat) => flat.id);
+  const [payments, adjustments, expenses, rentChanges] = await Promise.all([
     queryPayments(actor, { limit: null }),
-    queryAdjustments(actor, flats.map((flat) => flat.id)),
+    queryAdjustments(actor, flatIds),
     queryExpenses(actor, { year, limit: null }),
+    queryRentChanges(actor, flatIds),
   ]);
   const report = buildProfitReport({
     year,
     today: todayIST(),
     includePersonal,
-    flats,
+    flats: flats.map((flat) => ({
+      ...flat,
+      rentChanges: rentChanges
+        .filter((change) => change.flatId === flat.id)
+        .map((change) => ({ effectiveMonth: change.effectiveMonth, monthlyRent: change.monthlyRent })),
+    })),
     payments,
     adjustments,
     expenses,

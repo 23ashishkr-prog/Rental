@@ -59,6 +59,15 @@ export type ExpenseRecord = {
   createdAt: string;
 };
 
+export type RentChangeRecord = {
+  id: number;
+  flatId: number;
+  effectiveMonth: string;
+  monthlyRent: number;
+  note: string | null;
+  createdAt: string;
+};
+
 export type AdjustmentRecord = {
   id: number;
   flatId: number;

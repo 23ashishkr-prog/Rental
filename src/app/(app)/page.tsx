@@ -4,7 +4,7 @@ import { loadSnapshots } from "@/lib/portfolio";
 import { queryExpenses, queryPayments } from "@/lib/queries";
 import { currentMonthKey, formatDate, formatMonth, isInMonth, parseMonthParam } from "@/lib/dates";
 import { formatINR, roundMoney } from "@/lib/money";
-import { monthStanding, pendingLabel, type MonthStanding } from "@/lib/rent";
+import { displayedRent, monthStanding, pendingLabel, type MonthStanding } from "@/lib/rent";
 import { reminderText } from "@/lib/reminders";
 import { whatsAppHref } from "@/lib/upi";
 import { one } from "@/lib/search";
@@ -273,7 +273,7 @@ function TenantHome({
           <dl className="mt-5 grid grid-cols-2 gap-3 text-sm">
             <div>
               <dt className="text-muted-foreground">Monthly rent</dt>
-              <dd className="font-medium">{formatINR(flat.monthlyRent)}</dd>
+              <dd className="font-medium">{formatINR(displayedRent(flat.ledger, month, flat.monthlyRent))}</dd>
             </div>
             <div>
               <dt className="text-muted-foreground">Total paid</dt>

@@ -36,7 +36,7 @@ export async function GET(request: Request) {
       flat.tenantName,
       flat.tenantEmail,
       flat.tenantPhone,
-      flat.monthlyRent,
+      line?.rent ?? flat.monthlyRent,
       line?.opening ?? 0,
       line?.charge ?? 0,
       line?.adjustment ?? 0,

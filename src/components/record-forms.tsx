@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
-import { saveExpenseAction, saveAdjustmentAction, inviteTenantAction } from "@/server/rent-actions";
+import { saveExpenseAction, saveAdjustmentAction, saveRentChangeAction, inviteTenantAction } from "@/server/rent-actions";
 import { changePasswordAction } from "@/server/auth-actions";
 import { Field, FormMessage, controlClass } from "@/components/ui-bits";
 import { SubmitButton } from "@/components/submit-button";
@@ -72,6 +72,53 @@ export function ExpenseForm({
       </Field>
       <FormMessage state={state} />
       <SubmitButton>{expense ? "Save expense" : "Add expense"}</SubmitButton>
+    </form>
+  );
+}
+
+export function RentChangeForm({
+  flatId,
+  change,
+  defaultMonth,
+}: {
+  flatId: number;
+  change?: { id: number; effectiveMonth: string; monthlyRent: number; note: string | null };
+  defaultMonth: string;
+}) {
+  const [state, action] = useActionState(saveRentChangeAction, null);
+  return (
+    <form action={action} id="rent-increase" className="space-y-4">
+      <input type="hidden" name="flat_id" value={flatId} />
+      {change ? <input type="hidden" name="id" value={change.id} /> : null}
+      <Field label="Effective month" htmlFor="effective_month" hint="This rent is due from this month until the next increase.">
+        <input
+          id="effective_month"
+          name="effective_month"
+          type="month"
+          required
+          defaultValue={(change?.effectiveMonth || defaultMonth).slice(0, 7)}
+          className={controlClass}
+        />
+      </Field>
+      <Field label="Monthly rent (₹)" htmlFor="rent_change_amount">
+        <input
+          id="rent_change_amount"
+          name="amount"
+          inputMode="decimal"
+          required
+          defaultValue={change ? String(change.monthlyRent) : ""}
+          className={controlClass}
+        />
+      </Field>
+      <Field label="Note" htmlFor="rent_note">
+        <input id="rent_note" name="note" defaultValue={change?.note ?? ""} className={controlClass} placeholder="Renewal, market revision…" />
+      </Field>
+      <label className="flex min-h-12 items-start gap-3 text-sm font-medium">
+        <input type="checkbox" name="update_current" value="on" defaultChecked className="mt-1 size-5 accent-primary" />
+        <span>Also save the latest rent on the flat. Earlier months keep the previous amount.</span>
+      </label>
+      <FormMessage state={state} />
+      <SubmitButton>{change ? "Save rent change" : "Add rent increase"}</SubmitButton>
     </form>
   );
 }

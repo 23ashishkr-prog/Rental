@@ -102,26 +102,98 @@ export function monthStanding(ledger: Ledger, month: string): MonthStanding {
   };
 }
 
+export type RentRate = {
+  effectiveMonth: string;
+  monthlyRent: number;
+};
+
+/** Latest increase on or before the month, otherwise the rent stored on the flat. */
+export function rentForMonth(month: string, fallback: number, changes: RentRate[] = []): number {
+  const key = monthStart(month);
+  let selected: { effective: string; rent: number } | null = null;
+  for (const change of changes) {
+    let effective: string;
+    try {
+      effective = monthStart(change.effectiveMonth);
+    } catch {
+      continue;
+    }
+    if (effective <= key && (!selected || effective >= selected.effective)) {
+      selected = { effective, rent: change.monthlyRent };
+    }
+  }
+  return selected ? selected.rent : fallback;
+}
+
+export function displayedRent(ledger: Ledger, month: string, fallback: number): number {
+  try {
+    const key = monthStart(month);
+    return ledger.months.find((row) => row.month === key)?.rent ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * When the flat's stored rent is overwritten with the latest increase, keep the previous
+ * amount as a change from the rent start so earlier months do not jump to the new rent.
+ */
+export function baselineRentChange(input: {
+  rentStartDate: string | null;
+  storedRent: number;
+  changes: RentRate[];
+}): RentRate | null {
+  if (!input.rentStartDate || input.changes.length === 0) return null;
+  let start: string;
+  try {
+    start = monthStart(input.rentStartDate);
+  } catch {
+    return null;
+  }
+  let earliest = "";
+  for (const change of input.changes) {
+    try {
+      const month = monthStart(change.effectiveMonth);
+      if (!earliest || month < earliest) earliest = month;
+    } catch {
+      continue;
+    }
+  }
+  if (!earliest || start >= earliest) return null;
+  const covered = input.changes.some((change) => {
+    try {
+      return monthStart(change.effectiveMonth) <= start;
+    } catch {
+      return false;
+    }
+  });
+  if (covered) return null;
+  return { effectiveMonth: start, monthlyRent: input.storedRent };
+}
+
 function settledHistory(
   rentMonth: string | null,
   open: string,
   asOf: string,
   monthlyRent: number,
+  changes: RentRate[],
 ): SettledBefore | null {
   if (!rentMonth || rentMonth >= open) return null;
   const lastSettled = addMonths(open, -1);
   const through = lastSettled < asOf ? lastSettled : asOf;
   if (through < rentMonth) return null;
   let monthCount = 0;
+  let amount = 0;
   for (let month = rentMonth; month <= through && monthCount < 600; month = addMonths(month, 1)) {
     monthCount += 1;
+    amount += toPaise(rentForMonth(month, monthlyRent, changes));
   }
   if (monthCount === 0) return null;
   return {
     fromMonth: rentMonth,
     throughMonth: through,
     monthCount,
-    amount: fromPaise(toPaise(monthlyRent) * monthCount),
+    amount: fromPaise(amount),
     label: paidBeforeLabel(open),
   };
 }
@@ -144,12 +216,13 @@ export function buildLedger(input: {
   payments?: LedgerPayment[];
   openingBalance?: number;
   booksOpenDate?: string;
+  rentChanges?: RentRate[];
 }): Ledger {
   const asOf = monthStart(input.asOfMonth);
   const open = monthStart(input.booksOpenDate ?? ledgerStartMonth());
   const rentMonth = input.rentStartDate ? monthStart(input.rentStartDate) : null;
   const start = rentMonth && rentMonth > open ? rentMonth : rentMonth ? open : null;
-  const rentPaise = toPaise(input.monthlyRent);
+  const changes = input.rentChanges ?? [];
   const openingPaise = toPaise(input.openingBalance ?? 0);
 
   const adjustments = new Map<string, number>();
@@ -182,7 +255,7 @@ export function buildLedger(input: {
     paidByMonth.set(month, (paidByMonth.get(month) ?? 0) + amount);
   }
 
-  const settledBefore = settledHistory(rentMonth, open, asOf, input.monthlyRent);
+  const settledBefore = settledHistory(rentMonth, open, asOf, input.monthlyRent, changes);
 
   if (!start || start > asOf) {
     const net = -preStartPaise;
@@ -208,6 +281,7 @@ export function buildLedger(input: {
   for (let month = start; month <= asOf; month = addMonths(month, 1)) {
     if (++guard > 600) break;
     const adjustment = adjustments.get(month) ?? 0;
+    const rentPaise = toPaise(rentForMonth(month, input.monthlyRent, changes));
     const charge = rentPaise + adjustment;
     const paid = paidByMonth.get(month) ?? 0;
     const opening = running;

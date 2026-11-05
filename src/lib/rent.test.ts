@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildLedger, monthStanding, pendingLabel } from "./rent";
+import { baselineRentChange, buildLedger, monthStanding, pendingLabel, rentForMonth } from "./rent";
 
 const rent = 10000;
 
@@ -275,6 +275,59 @@ test("midnight IST does not move a payment into the previous month", () => {
   });
   assert.equal(ledger.months[0].paid, rent);
   assert.equal(ledger.pending, 0);
+});
+
+test("rent for a month follows the latest increase on or before it", () => {
+  const changes = [
+    { effectiveMonth: "2026-05-15", monthlyRent: 12000 },
+    { effectiveMonth: "2026-07-01", monthlyRent: 13000 },
+  ];
+  assert.equal(rentForMonth("2026-04-01", 10000, changes), 10000);
+  assert.equal(rentForMonth("2026-05-01", 10000, changes), 12000);
+  assert.equal(rentForMonth("2026-06-01", 10000, changes), 12000);
+  assert.equal(rentForMonth("2026-08-01", 10000, changes), 13000);
+});
+
+test("paying the old rent after an increase leaves that month short", () => {
+  const ledger = buildLedger({
+    monthlyRent: 10000,
+    rentStartDate: "2026-04-01",
+    asOfMonth: "2026-06-01",
+    rentChanges: [{ effectiveMonth: "2026-05-01", monthlyRent: 12000 }],
+    payments: [
+      { forMonth: null, paymentDate: "2026-04-03", amount: 10000, status: "confirmed" },
+      { forMonth: null, paymentDate: "2026-05-04", amount: 10000, status: "confirmed" },
+      { forMonth: null, paymentDate: "2026-06-02", amount: 12000, status: "confirmed" },
+    ],
+  });
+  assert.equal(ledger.months[0].rent, 10000);
+  assert.equal(ledger.months[0].closing, 0);
+  assert.equal(ledger.months[1].rent, 12000);
+  assert.equal(ledger.months[1].paid, 10000);
+  assert.equal(monthStanding(ledger, "2026-05-01").status, "partial");
+  assert.equal(monthStanding(ledger, "2026-05-01").remaining, 2000);
+  assert.equal(ledger.months[2].rent, 12000);
+  assert.equal(ledger.pending, 2000);
+});
+
+test("keeping the latest rent on the flat does not rewrite earlier months", () => {
+  const baseline = baselineRentChange({
+    rentStartDate: "2026-04-01",
+    storedRent: 10000,
+    changes: [{ effectiveMonth: "2026-06-01", monthlyRent: 12000 }],
+  });
+  assert.deepEqual(baseline, { effectiveMonth: "2026-04-01", monthlyRent: 10000 });
+  assert.equal(
+    baselineRentChange({
+      rentStartDate: "2026-04-01",
+      storedRent: 10000,
+      changes: [
+        { effectiveMonth: "2026-04-01", monthlyRent: 10000 },
+        { effectiveMonth: "2026-06-01", monthlyRent: 12000 },
+      ],
+    }),
+    null,
+  );
 });
 
 test("pending label describes partial months", () => {
