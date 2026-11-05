@@ -6,6 +6,7 @@ import { formatINR } from "@/lib/money";
 import { one } from "@/lib/search";
 import QRCode from "qrcode";
 import { PayPanel } from "@/components/pay-panel";
+import { displayedRent } from "@/lib/rent";
 import { buildUpiUrl } from "@/lib/upi";
 import { PageHeader, buttonLinkClass } from "@/components/ui-bits";
 export const dynamic = "force-dynamic";
@@ -45,7 +46,7 @@ export default async function PayPage({
     );
   }
 
-  const defaultAmount = flat.ledger.pending > 0 ? flat.ledger.pending : flat.monthlyRent;
+  const defaultAmount = flat.ledger.pending > 0 ? flat.ledger.pending : displayedRent(flat.ledger, month, flat.monthlyRent);
   const initialQr =
     defaultAmount > 0
       ? await QRCode.toString(buildUpiUrl(defaultAmount, `Flat ${flat.unitNumber} rent`), {

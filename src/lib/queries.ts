@@ -6,9 +6,11 @@ import {
   asNumber,
   asText,
   isUndefinedColumn,
+  isUndefinedTable,
   expenseFlatColumnIsReady,
   markExpenseFlatReady,
   markOpeningBalanceReady,
+  markRentChangesReady,
   missingColumn,
   sql,
 } from "./db";
@@ -18,6 +20,7 @@ import type {
   DbUser,
   ExpenseRecord,
   FlatRecord,
+  RentChangeRecord,
   PaymentRecord,
   PaymentStatus,
 } from "./types";
@@ -371,6 +374,32 @@ export async function expenseFlatColumnExists(): Promise<boolean> {
     return true;
   } catch (error) {
     if (missingColumn(error, "flat_id")) return false;
+    throw error;
+  }
+}
+
+export async function queryRentChanges(actor: Actor, flatIds: number[]): Promise<RentChangeRecord[]> {
+  const ids = actor.isAdmin ? flatIds : flatIds.filter((id) => actor.flatIds.includes(id));
+  if (ids.length === 0) return [];
+  try {
+    const rows = await sql().query(
+      `SELECT id, flat_id, effective_month, monthly_rent, note, created_at
+       FROM rent_changes
+       WHERE flat_id = ANY($1::bigint[])
+       ORDER BY effective_month ASC, id ASC`,
+      [ids],
+    );
+    markRentChangesReady();
+    return (rows as Row[]).map((row) => ({
+      id: Number(row.id),
+      flatId: Number(row.flat_id),
+      effectiveMonth: asDate(row.effective_month) ?? "",
+      monthlyRent: asNumber(row.monthly_rent),
+      note: asText(row.note),
+      createdAt: String(row.created_at ?? ""),
+    }));
+  } catch (error) {
+    if (isUndefinedTable(error, "rent_changes")) return [];
     throw error;
   }
 }

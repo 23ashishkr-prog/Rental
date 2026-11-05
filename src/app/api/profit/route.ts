@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { parseYearParam, todayIST } from "@/lib/dates";
 import { profitCsv, buildProfitReport } from "@/lib/profit";
-import { expenseFlatColumnExists, queryAdjustments, queryExpenses, queryFlats, queryPayments } from "@/lib/queries";
+import { expenseFlatColumnExists, queryAdjustments, queryExpenses, queryFlats, queryPayments, queryRentChanges } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -20,16 +20,23 @@ export async function GET(request: Request) {
     );
   }
   const flats = await queryFlats(user, { active: "all" });
-  const [payments, adjustments, expenses] = await Promise.all([
+  const flatIds = flats.map((flat) => flat.id);
+  const [payments, adjustments, expenses, rentChanges] = await Promise.all([
     queryPayments(user, { limit: null }),
-    queryAdjustments(user, flats.map((flat) => flat.id)),
+    queryAdjustments(user, flatIds),
     queryExpenses(user, { year, limit: null }),
+    queryRentChanges(user, flatIds),
   ]);
   const report = buildProfitReport({
     year,
     today: todayIST(),
     includePersonal,
-    flats,
+    flats: flats.map((flat) => ({
+      ...flat,
+      rentChanges: rentChanges
+        .filter((change) => change.flatId === flat.id)
+        .map((change) => ({ effectiveMonth: change.effectiveMonth, monthlyRent: change.monthlyRent })),
+    })),
     payments,
     adjustments,
     expenses,

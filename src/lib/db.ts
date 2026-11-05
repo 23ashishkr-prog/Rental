@@ -56,8 +56,15 @@ export function isForeignKeyViolation(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && (error as { code?: string }).code === "23503");
 }
 
+export function isUndefinedTable(error: unknown, table: string): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: string; message?: string };
+  return candidate.code === "42P01" && (candidate.message ?? "").includes(table);
+}
+
 let openingBalanceColumnReady = false;
 let expenseFlatColumnReady = false;
+let rentChangesTableReady = false;
 
 export function markOpeningBalanceReady(): void {
   openingBalanceColumnReady = true;
@@ -73,4 +80,12 @@ export function markExpenseFlatReady(): void {
 
 export function expenseFlatColumnIsReady(): boolean {
   return expenseFlatColumnReady;
+}
+
+export function markRentChangesReady(): void {
+  rentChangesTableReady = true;
+}
+
+export function rentChangesTableIsReady(): boolean {
+  return rentChangesTableReady;
 }

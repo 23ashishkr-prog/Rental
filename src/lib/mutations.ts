@@ -2,14 +2,19 @@ import "server-only";
 import { AppError, ConfigError } from "./errors";
 import { isAdminEmail, isValidEmail } from "./email";
 import {
+  asDate,
+  asNumber,
   isForeignKeyViolation,
+  isUndefinedTable,
   isUniqueViolation,
   markExpenseFlatReady,
   markOpeningBalanceReady,
+  markRentChangesReady,
   missingColumn,
   sql,
 } from "./db";
 import { hashPassword } from "./passwords";
+import { baselineRentChange } from "./rent";
 import type { Actor } from "./types";
 import { ownsFlat } from "./types";
 
@@ -49,6 +54,9 @@ const EXPENSE_FLAT_MIGRATION =
 
 const OPENING_BALANCE_MIGRATION =
   "Flats cannot store an opening balance yet. In the Neon SQL editor, run migrations/003_flat_opening_balance.sql: ALTER TABLE public.flats ADD COLUMN IF NOT EXISTS opening_balance numeric(12,2) NOT NULL DEFAULT 0;";
+
+const RENT_CHANGES_MIGRATION =
+  "Rent increases are not stored yet. In the Neon SQL editor, run migrations/004_rent_changes.sql: CREATE TABLE IF NOT EXISTS public.rent_changes (id bigserial PRIMARY KEY, flat_id bigint NOT NULL REFERENCES public.flats (id), effective_month date NOT NULL, monthly_rent numeric(12,2) NOT NULL, note text, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE (flat_id, effective_month));";
 
 function assertAdmin(actor: Actor) {
   if (!actor.isAdmin) throw new AppError("Only an admin can do that.");
@@ -151,6 +159,14 @@ export async function deleteFlat(actor: Actor, id: number): Promise<void> {
   );
   const row = counts[0] as { payments?: unknown; adjustments?: unknown; users?: unknown } | undefined;
   if (!row) throw new AppError("That flat could not be found.");
+  let rentChanges = 0;
+  try {
+    const changeRows = await sql().query(`SELECT count(*) AS n FROM rent_changes WHERE flat_id = $1`, [id]);
+    rentChanges = Number((changeRows[0] as { n?: unknown } | undefined)?.n ?? 0);
+    markRentChangesReady();
+  } catch (error) {
+    if (!isUndefinedTable(error, "rent_changes")) throw error;
+  }
   let expenses = 0;
   try {
     const expenseRows = await sql().query(`SELECT count(*) AS n FROM expenses WHERE flat_id = $1`, [id]);
@@ -159,14 +175,103 @@ export async function deleteFlat(actor: Actor, id: number): Promise<void> {
   } catch (error) {
     if (!missingColumn(error, "flat_id")) throw error;
   }
-  const blocked = Number(row.payments) + Number(row.adjustments) + Number(row.users) + expenses;
+  const blocked = Number(row.payments) + Number(row.adjustments) + Number(row.users) + expenses + rentChanges;
   if (blocked > 0) {
     throw new AppError(
-      "This flat has payments, adjustments, expenses, or a linked login, so it cannot be deleted. Mark it inactive instead.",
+      "This flat has payments, adjustments, expenses, rent increases, or a linked login, so it cannot be deleted. Mark it inactive instead.",
     );
   }
   const deleted = await sql().query(`DELETE FROM flats WHERE id = $1 RETURNING id`, [id]);
   if (deleted.length === 0) throw new AppError("That flat could not be found.");
+}
+
+export type RentChangeInput = {
+  id?: number;
+  flatId: number;
+  effectiveMonth: string;
+  monthlyRent: number;
+  note: string | null;
+  updateCurrent: boolean;
+};
+
+function rentChangeError(error: unknown): never {
+  if (isUndefinedTable(error, "rent_changes")) throw new ConfigError(RENT_CHANGES_MIGRATION);
+  if (isUniqueViolation(error)) {
+    throw new AppError("This flat already has a rent for that month. Edit that entry instead.");
+  }
+  if (isForeignKeyViolation(error)) throw new AppError("That flat could not be found.");
+  throw error;
+}
+
+async function applyLatestRent(flatId: number): Promise<void> {
+  const flatRows = await sql().query(`SELECT monthly_rent, rent_start_date FROM flats WHERE id = $1`, [flatId]);
+  const flat = flatRows[0] as { monthly_rent?: unknown; rent_start_date?: unknown } | undefined;
+  if (!flat) return;
+  const storedRent = asNumber(flat.monthly_rent);
+  const rentStartDate = asDate(flat.rent_start_date);
+  const changeRows = await sql().query(
+    `SELECT effective_month, monthly_rent FROM rent_changes WHERE flat_id = $1 ORDER BY effective_month ASC, id ASC`,
+    [flatId],
+  );
+  const changes = (changeRows as { effective_month?: unknown; monthly_rent?: unknown }[])
+    .map((row) => ({
+      effectiveMonth: asDate(row.effective_month) ?? "",
+      monthlyRent: asNumber(row.monthly_rent),
+    }))
+    .filter((change) => change.effectiveMonth);
+  const baseline = baselineRentChange({ rentStartDate, storedRent, changes });
+  if (baseline) {
+    await sql().query(
+      `INSERT INTO rent_changes (flat_id, effective_month, monthly_rent, note)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (flat_id, effective_month) DO NOTHING`,
+      [flatId, baseline.effectiveMonth, baseline.monthlyRent, "Previous rent"],
+    );
+  }
+  const latest = [...changes, ...(baseline ? [baseline] : [])].sort((a, b) =>
+    a.effectiveMonth.localeCompare(b.effectiveMonth),
+  ).at(-1);
+  if (!latest) return;
+  await sql().query(`UPDATE flats SET monthly_rent = $1 WHERE id = $2`, [latest.monthlyRent, flatId]);
+}
+
+export async function saveRentChange(actor: Actor, input: RentChangeInput): Promise<void> {
+  assertAdmin(actor);
+  try {
+    if (input.id) {
+      const rows = await sql().query(
+        `UPDATE rent_changes
+         SET effective_month = $1, monthly_rent = $2, note = $3
+         WHERE id = $4 AND flat_id = $5
+         RETURNING id`,
+        [input.effectiveMonth, input.monthlyRent, input.note, input.id, input.flatId],
+      );
+      if (rows.length === 0) throw new AppError("That rent change could not be found.");
+    } else {
+      await sql().query(
+        `INSERT INTO rent_changes (flat_id, effective_month, monthly_rent, note)
+         VALUES ($1, $2, $3, $4)`,
+        [input.flatId, input.effectiveMonth, input.monthlyRent, input.note],
+      );
+    }
+    markRentChangesReady();
+  } catch (error) {
+    if (error instanceof AppError || error instanceof ConfigError) throw error;
+    rentChangeError(error);
+  }
+  if (input.updateCurrent) await applyLatestRent(input.flatId);
+}
+
+export async function deleteRentChange(actor: Actor, id: number): Promise<number> {
+  assertAdmin(actor);
+  try {
+    const rows = await sql().query(`DELETE FROM rent_changes WHERE id = $1 RETURNING flat_id`, [id]);
+    if (rows.length === 0) throw new AppError("That rent change could not be found.");
+    return Number((rows[0] as { flat_id?: unknown }).flat_id);
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    rentChangeError(error);
+  }
 }
 
 export async function insertPayment(actor: Actor, input: PaymentInput): Promise<number> {

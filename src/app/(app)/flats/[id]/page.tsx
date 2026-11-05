@@ -6,15 +6,16 @@ import { currentMonthKey, formatDate, formatMonth } from "@/lib/dates";
 import { formatINR, roundMoney } from "@/lib/money";
 import { isPersonalCategory } from "@/lib/categories";
 import { expenseFlatColumnExists, queryExpenses } from "@/lib/queries";
-import { monthStanding, pendingLabel, type SettledBefore } from "@/lib/rent";
+import { displayedRent, monthStanding, pendingLabel, type SettledBefore } from "@/lib/rent";
+import { rentChangesTableIsReady } from "@/lib/db";
 import { reminderText } from "@/lib/reminders";
 import { whatsAppHref } from "@/lib/upi";
 import { notice, one } from "@/lib/search";
-import { AdjustmentForm } from "@/components/record-forms";
+import { AdjustmentForm, RentChangeForm } from "@/components/record-forms";
 import { ConfirmForm } from "@/components/submit-button";
 import { StatusBadge } from "@/components/status-badge";
 import { PageHeader, buttonLinkClass } from "@/components/ui-bits";
-import { deleteAdjustmentAction, deleteFlatAction, deletePaymentAction } from "@/server/rent-actions";
+import { deleteAdjustmentAction, deleteFlatAction, deletePaymentAction, deleteRentChangeAction } from "@/server/rent-actions";
 import { Button } from "@/components/ui/button";
 
 export const dynamic = "force-dynamic";
@@ -92,7 +93,7 @@ export default async function FlatDetailPage({
               : "Nothing pending"}
         </p>
         <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
-          <p>Rent {formatINR(snapshot.monthlyRent)}</p>
+          <p>Rent {formatINR(displayedRent(snapshot.ledger, month, snapshot.monthlyRent))}</p>
           <p>Paid {formatINR(snapshot.ledger.totalPaid)}</p>
           {snapshot.ledger.advancePaid > 0 ? <p>Advance {formatINR(snapshot.ledger.advancePaid)}</p> : null}
           {snapshot.awaiting > 0 ? <p>Unconfirmed {formatINR(snapshot.awaiting)}</p> : null}
@@ -137,6 +138,15 @@ export default async function FlatDetailPage({
           <p className="font-display mt-1 text-2xl font-semibold">{formatINR(standing.arrears)}</p>
         </div>
       </section>
+
+      <RentHistory
+        actorIsAdmin={actor.isAdmin}
+        flatId={snapshot.id}
+        month={month}
+        changes={snapshot.rentChanges}
+        editingId={one(query.change)}
+        tableReady={rentChangesTableIsReady()}
+      />
 
       <section>
         <h2 className="mb-3 font-display text-xl font-semibold">Ledger</h2>
@@ -340,6 +350,90 @@ export default async function FlatDetailPage({
         </section>
       ) : null}
     </div>
+  );
+}
+
+function RentHistory({
+  actorIsAdmin,
+  flatId,
+  month,
+  changes,
+  editingId,
+  tableReady,
+}: {
+  actorIsAdmin: boolean;
+  flatId: number;
+  month: string;
+  changes: { id: number; effectiveMonth: string; monthlyRent: number; note: string | null }[];
+  editingId?: string;
+  tableReady: boolean;
+}) {
+  const editing = changes.find((change) => String(change.id) === editingId);
+  const timeline = [...changes].sort((a, b) => b.effectiveMonth.localeCompare(a.effectiveMonth) || b.id - a.id);
+  return (
+    <section className="space-y-3">
+      <h2 className="font-display text-xl font-semibold">Rent history</h2>
+      {timeline.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No increases yet. Each month uses the rent stored on the flat.</p>
+      ) : (
+        <ol className="space-y-2">
+          {timeline.map((change) => (
+            <li key={change.id} className="rounded-2xl bg-card p-4 ring-1 ring-foreground/10">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-semibold">{formatMonth(change.effectiveMonth)}</p>
+                  <p className="text-sm text-muted-foreground">{change.note || "Rent increase"}</p>
+                </div>
+                <p className="font-display text-xl font-semibold">{formatINR(change.monthlyRent)}</p>
+              </div>
+              {actorIsAdmin ? (
+                <div className="mt-3 flex gap-4">
+                  <Link href={`/flats/${flatId}?change=${change.id}#rent-increase`} className="text-sm font-medium text-primary">
+                    Edit
+                  </Link>
+                  <ConfirmForm action={deleteRentChangeAction} message="Delete this rent increase?">
+                    <input type="hidden" name="id" value={change.id} />
+                    <input type="hidden" name="flat_id" value={flatId} />
+                    <button type="submit" className="text-sm font-medium text-destructive">
+                      Delete
+                    </button>
+                  </ConfirmForm>
+                </div>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      )}
+      {actorIsAdmin ? (
+        tableReady || changes.length > 0 ? (
+          <div className="rounded-2xl bg-card p-4 ring-1 ring-foreground/10">
+            <h3 className="mb-3 font-semibold">{editing ? "Edit rent increase" : "Rent increase"}</h3>
+            <RentChangeForm flatId={flatId} change={editing} defaultMonth={month} />
+            {editing ? (
+              <p className="mt-3 text-sm">
+                <Link href={`/flats/${flatId}#rent-increase`} className="font-medium text-primary">
+                  Cancel edit
+                </Link>
+              </p>
+            ) : null}
+          </div>
+        ) : (
+          <div className="rounded-2xl bg-card p-4 text-sm leading-6 ring-1 ring-foreground/10">
+            <p className="font-medium">Rent increases need one new table.</p>
+            <pre className="mt-3 overflow-x-auto text-xs leading-5">{`CREATE TABLE IF NOT EXISTS public.rent_changes (
+  id bigserial PRIMARY KEY,
+  flat_id bigint NOT NULL REFERENCES public.flats (id),
+  effective_month date NOT NULL,
+  monthly_rent numeric(12,2) NOT NULL,
+  note text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (flat_id, effective_month)
+);`}</pre>
+            <p className="mt-2 text-muted-foreground">The same statement is in migrations/004_rent_changes.sql.</p>
+          </div>
+        )
+      ) : null}
+    </section>
   );
 }
 

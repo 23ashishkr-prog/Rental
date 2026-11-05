@@ -3,7 +3,7 @@ import { requireUser } from "@/lib/auth";
 import { loadSnapshots } from "@/lib/portfolio";
 import { currentMonthKey, formatDate } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
-import { pendingLabel } from "@/lib/rent";
+import { displayedRent, pendingLabel } from "@/lib/rent";
 import { one } from "@/lib/search";
 import { PageHeader, buttonLinkClass, controlClass } from "@/components/ui-bits";
 
@@ -67,7 +67,7 @@ export default async function FlatsPage({
                   </p>
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  {formatINR(flat.monthlyRent)} / month
+                  {formatINR(displayedRent(flat.ledger, month, flat.monthlyRent))} / month
                   {flat.ledger.pending > 0 ? ` · ${pendingLabel(flat.ledger.pendingMonths, flat.ledger.partial)}` : ""}
                   {!flat.active ? " · Inactive" : ""}
                 </p>

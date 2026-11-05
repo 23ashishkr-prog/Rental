@@ -4,18 +4,20 @@ import { revalidatePath } from "next/cache";
 import { redirect, unstable_rethrow } from "next/navigation";
 import { actionError, type FormState } from "@/lib/action-error";
 import { requireAdmin, requireUser } from "@/lib/auth";
-import { AppError } from "@/lib/errors";
+import { AppError, ConfigError } from "@/lib/errors";
 import { isValidEmail } from "@/lib/email";
 import {
   deleteAdjustment,
   deleteExpense,
   deleteFlat,
   deletePayment,
+  deleteRentChange,
   insertAdjustment,
   insertExpense,
   insertFlat,
   insertPayment,
   inviteTenant,
+  saveRentChange,
   setPaymentStatus,
   updateExpense,
   updateFlat,
@@ -243,6 +245,50 @@ export async function deleteExpenseAction(formData: FormData): Promise<void> {
   revalidatePath("/");
   revalidatePath("/profit");
   redirect("/expenses");
+}
+
+function revalidateRent(flatId: number) {
+  revalidatePath(`/flats/${flatId}`);
+  revalidatePath("/flats");
+  revalidatePath("/");
+  revalidatePath("/profit");
+  revalidatePath("/report");
+  revalidatePath("/pay");
+}
+
+export async function saveRentChangeAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  try {
+    const actor = await requireAdmin();
+    const flatId = readId(formData, "flat_id");
+    const existing = readString(formData, "id");
+    await saveRentChange(actor, {
+      id: existing ? readId(formData) : undefined,
+      flatId,
+      effectiveMonth: readMonthField(formData, "effective_month"),
+      monthlyRent: readAmount(formData),
+      note: emptyToNull(clip(readString(formData, "note"), 200)),
+      updateCurrent: formData.getAll("update_current").map(String).includes("on"),
+    });
+    revalidateRent(flatId);
+    redirect(`/flats/${flatId}#rent-increase`);
+  } catch (error) {
+    return actionError(error);
+  }
+}
+
+export async function deleteRentChangeAction(formData: FormData): Promise<void> {
+  const flatId = readId(formData, "flat_id");
+  try {
+    const actor = await requireAdmin();
+    await deleteRentChange(actor, readId(formData));
+  } catch (error) {
+    unstable_rethrow(error);
+    const message =
+      error instanceof AppError || error instanceof ConfigError ? error.message : "Could not delete that rent change.";
+    redirect(`/flats/${flatId}?error=${encodeURIComponent(message)}#rent-increase`);
+  }
+  revalidateRent(flatId);
+  redirect(`/flats/${flatId}#rent-increase`);
 }
 
 export async function saveAdjustmentAction(_prev: FormState, formData: FormData): Promise<FormState> {
