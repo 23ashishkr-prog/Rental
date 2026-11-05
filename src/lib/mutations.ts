@@ -1,7 +1,14 @@
 import "server-only";
-import { AppError } from "./errors";
+import { AppError, ConfigError } from "./errors";
 import { isAdminEmail, isValidEmail } from "./email";
-import { isUniqueViolation, sql } from "./db";
+import {
+  isForeignKeyViolation,
+  isUniqueViolation,
+  markExpenseFlatReady,
+  markOpeningBalanceReady,
+  missingColumn,
+  sql,
+} from "./db";
 import { hashPassword } from "./passwords";
 import type { Actor } from "./types";
 import { ownsFlat } from "./types";
@@ -14,6 +21,7 @@ export type FlatInput = {
   monthlyRent: number;
   rentStartDate: string | null;
   active: boolean;
+  openingBalance: number;
 };
 
 export type PaymentInput = {
@@ -33,7 +41,14 @@ export type ExpenseInput = {
   amount: number;
   expenseDate: string;
   notes: string | null;
+  flatId: number | null;
 };
+
+const EXPENSE_FLAT_MIGRATION =
+  "Expenses are not linked to flats yet. In the Neon SQL editor, run migrations/002_expense_flat.sql: ALTER TABLE public.expenses ADD COLUMN IF NOT EXISTS flat_id bigint REFERENCES public.flats (id);";
+
+const OPENING_BALANCE_MIGRATION =
+  "Flats cannot store an opening balance yet. In the Neon SQL editor, run migrations/003_flat_opening_balance.sql: ALTER TABLE public.flats ADD COLUMN IF NOT EXISTS opening_balance numeric(12,2) NOT NULL DEFAULT 0;";
 
 function assertAdmin(actor: Actor) {
   if (!actor.isAdmin) throw new AppError("Only an admin can do that.");
@@ -45,43 +60,84 @@ function assertOwnFlat(actor: Actor, flatId: number) {
 
 export async function insertFlat(actor: Actor, input: FlatInput): Promise<number> {
   assertAdmin(actor);
-  const rows = await sql().query(
-    `INSERT INTO flats (unit_number, tenant_name, monthly_rent, rent_start_date, tenant_email, tenant_phone, active)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING id`,
-    [
-      input.unitNumber,
-      input.tenantName,
-      input.monthlyRent,
-      input.rentStartDate,
-      input.tenantEmail,
-      input.tenantPhone,
-      input.active,
-    ],
-  );
-  return Number((rows[0] as { id: unknown }).id);
+  const values = [
+    input.unitNumber,
+    input.tenantName,
+    input.monthlyRent,
+    input.rentStartDate,
+    input.tenantEmail,
+    input.tenantPhone,
+    input.active,
+  ];
+  try {
+    const rows = await sql().query(
+      `INSERT INTO flats (unit_number, tenant_name, monthly_rent, rent_start_date, tenant_email, tenant_phone, active, opening_balance)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id`,
+      [...values, input.openingBalance],
+    );
+    markOpeningBalanceReady();
+    return Number((rows[0] as { id: unknown }).id);
+  } catch (error) {
+    if (!missingColumn(error, "opening_balance")) throw error;
+    if (input.openingBalance !== 0) throw new ConfigError(OPENING_BALANCE_MIGRATION);
+    const rows = await sql().query(
+      `INSERT INTO flats (unit_number, tenant_name, monthly_rent, rent_start_date, tenant_email, tenant_phone, active)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id`,
+      values,
+    );
+    return Number((rows[0] as { id: unknown }).id);
+  }
 }
 
 export async function updateFlat(actor: Actor, id: number, input: FlatInput): Promise<void> {
   assertAdmin(actor);
-  const rows = await sql().query(
-    `UPDATE flats
-     SET unit_number = $1, tenant_name = $2, monthly_rent = $3, rent_start_date = $4,
-         tenant_email = $5, tenant_phone = $6, active = $7
-     WHERE id = $8
-     RETURNING id`,
-    [
-      input.unitNumber,
-      input.tenantName,
-      input.monthlyRent,
-      input.rentStartDate,
-      input.tenantEmail,
-      input.tenantPhone,
-      input.active,
-      id,
-    ],
-  );
-  if (rows.length === 0) throw new AppError("That flat could not be found.");
+  const values = [
+    input.unitNumber,
+    input.tenantName,
+    input.monthlyRent,
+    input.rentStartDate,
+    input.tenantEmail,
+    input.tenantPhone,
+    input.active,
+    id,
+  ];
+  try {
+    const rows = await sql().query(
+      `UPDATE flats
+       SET unit_number = $1, tenant_name = $2, monthly_rent = $3, rent_start_date = $4,
+           tenant_email = $5, tenant_phone = $6, active = $7, opening_balance = $8
+       WHERE id = $9
+       RETURNING id`,
+      [
+        input.unitNumber,
+        input.tenantName,
+        input.monthlyRent,
+        input.rentStartDate,
+        input.tenantEmail,
+        input.tenantPhone,
+        input.active,
+        input.openingBalance,
+        id,
+      ],
+    );
+    markOpeningBalanceReady();
+    if (rows.length === 0) throw new AppError("That flat could not be found.");
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    if (!missingColumn(error, "opening_balance")) throw error;
+    if (input.openingBalance !== 0) throw new ConfigError(OPENING_BALANCE_MIGRATION);
+    const rows = await sql().query(
+      `UPDATE flats
+       SET unit_number = $1, tenant_name = $2, monthly_rent = $3, rent_start_date = $4,
+           tenant_email = $5, tenant_phone = $6, active = $7
+       WHERE id = $8
+       RETURNING id`,
+      values,
+    );
+    if (rows.length === 0) throw new AppError("That flat could not be found.");
+  }
 }
 
 export async function deleteFlat(actor: Actor, id: number): Promise<void> {
@@ -95,10 +151,18 @@ export async function deleteFlat(actor: Actor, id: number): Promise<void> {
   );
   const row = counts[0] as { payments?: unknown; adjustments?: unknown; users?: unknown } | undefined;
   if (!row) throw new AppError("That flat could not be found.");
-  const blocked = Number(row.payments) + Number(row.adjustments) + Number(row.users);
+  let expenses = 0;
+  try {
+    const expenseRows = await sql().query(`SELECT count(*) AS n FROM expenses WHERE flat_id = $1`, [id]);
+    expenses = Number((expenseRows[0] as { n?: unknown } | undefined)?.n ?? 0);
+    markExpenseFlatReady();
+  } catch (error) {
+    if (!missingColumn(error, "flat_id")) throw error;
+  }
+  const blocked = Number(row.payments) + Number(row.adjustments) + Number(row.users) + expenses;
   if (blocked > 0) {
     throw new AppError(
-      "This flat has payments, adjustments, or a linked login, so it cannot be deleted. Mark it inactive instead.",
+      "This flat has payments, adjustments, expenses, or a linked login, so it cannot be deleted. Mark it inactive instead.",
     );
   }
   const deleted = await sql().query(`DELETE FROM flats WHERE id = $1 RETURNING id`, [id]);
@@ -169,27 +233,61 @@ export async function deletePayment(actor: Actor, id: number): Promise<void> {
   if (rows.length === 0) throw new AppError("That payment could not be found.");
 }
 
+function expenseValues(input: ExpenseInput): unknown[] {
+  return [input.title, input.category, input.amount, input.expenseDate, input.notes];
+}
+
 export async function insertExpense(actor: Actor, input: ExpenseInput): Promise<number> {
   assertAdmin(actor);
-  const rows = await sql().query(
-    `INSERT INTO expenses (title, category, amount, expense_date, notes)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id`,
-    [input.title, input.category, input.amount, input.expenseDate, input.notes],
-  );
-  return Number((rows[0] as { id: unknown }).id);
+  try {
+    const rows = await sql().query(
+      `INSERT INTO expenses (title, category, amount, expense_date, notes, flat_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id`,
+      [...expenseValues(input), input.flatId],
+    );
+    markExpenseFlatReady();
+    return Number((rows[0] as { id: unknown }).id);
+  } catch (error) {
+    if (isForeignKeyViolation(error)) throw new AppError("That flat could not be found.");
+    if (!missingColumn(error, "flat_id")) throw error;
+    if (input.flatId != null) throw new ConfigError(EXPENSE_FLAT_MIGRATION);
+    const rows = await sql().query(
+      `INSERT INTO expenses (title, category, amount, expense_date, notes)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id`,
+      expenseValues(input),
+    );
+    return Number((rows[0] as { id: unknown }).id);
+  }
 }
 
 export async function updateExpense(actor: Actor, id: number, input: ExpenseInput): Promise<void> {
   assertAdmin(actor);
-  const rows = await sql().query(
-    `UPDATE expenses
-     SET title = $1, category = $2, amount = $3, expense_date = $4, notes = $5
-     WHERE id = $6
-     RETURNING id`,
-    [input.title, input.category, input.amount, input.expenseDate, input.notes, id],
-  );
-  if (rows.length === 0) throw new AppError("That expense could not be found.");
+  try {
+    const rows = await sql().query(
+      `UPDATE expenses
+       SET title = $1, category = $2, amount = $3, expense_date = $4, notes = $5, flat_id = $6
+       WHERE id = $7
+       RETURNING id`,
+      [...expenseValues(input), input.flatId, id],
+    );
+    markExpenseFlatReady();
+    if (rows.length === 0) throw new AppError("That expense could not be found.");
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    if (isForeignKeyViolation(error)) throw new AppError("That flat could not be found.");
+    if (!missingColumn(error, "flat_id")) throw error;
+    if (input.flatId != null) throw new ConfigError(EXPENSE_FLAT_MIGRATION);
+    const rows = await sql().query(
+      `UPDATE expenses
+       SET title = $1, category = $2, amount = $3, expense_date = $4, notes = $5
+       WHERE id = $6
+       RETURNING id`,
+      [...expenseValues(input), id],
+    );
+    if (rows.length === 0) throw new AppError("That expense could not be found.");
+  }
 }
 
 export async function deleteExpense(actor: Actor, id: number): Promise<void> {

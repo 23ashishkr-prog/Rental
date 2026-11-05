@@ -4,7 +4,7 @@ import { loadSnapshots } from "@/lib/portfolio";
 import { queryExpenses, queryPayments } from "@/lib/queries";
 import { currentMonthKey, formatDate, formatMonth, isInMonth, parseMonthParam } from "@/lib/dates";
 import { formatINR, roundMoney } from "@/lib/money";
-import { pendingLabel } from "@/lib/rent";
+import { monthStanding, pendingLabel, type MonthStanding } from "@/lib/rent";
 import { reminderText } from "@/lib/reminders";
 import { whatsAppHref } from "@/lib/upi";
 import { one } from "@/lib/search";
@@ -29,34 +29,38 @@ export default async function HomePage({
     return <TenantHome snapshots={snapshots} month={month} />;
   }
 
-  const [snapshots, expenses, monthPayments] = await Promise.all([
+  const [snapshots, expenses, allPayments] = await Promise.all([
     loadSnapshots(actor, month, { active: "active" }),
     queryExpenses(actor, { month }),
-    queryPayments(actor, { month, limit: 100 }),
+    queryPayments(actor, { limit: null }),
   ]);
-
-  const expected = roundMoney(
-    snapshots.reduce((sum, flat) => {
-      const row = flat.ledger.months.find((item) => item.month === month);
-      return sum + (row?.charge ?? 0);
-    }, 0),
-  );
-  const applied = roundMoney(
-    snapshots.reduce((sum, flat) => {
-      const row = flat.ledger.months.find((item) => item.month === month);
-      return sum + (row?.paid ?? 0);
-    }, 0),
-  );
+  const year = month.slice(0, 4);
+  const through = month.slice(0, 7);
   const collected = roundMoney(
-    monthPayments
+    allPayments
       .filter((payment) => payment.status === "confirmed" && isInMonth(payment.paymentDate, month))
       .reduce((sum, payment) => sum + payment.amount, 0),
   );
-  const expenseTotal = roundMoney(expenses.reduce((sum, expense) => sum + expense.amount, 0));
+  const collectedYear = roundMoney(
+    allPayments
+      .filter(
+        (payment) =>
+          payment.status === "confirmed" &&
+          payment.paymentDate.startsWith(year) &&
+          payment.paymentDate.slice(0, 7) <= through,
+      )
+      .reduce((sum, payment) => sum + payment.amount, 0),
+  );
+  const standings = snapshots.map((flat) => ({ flat, standing: monthStanding(flat.ledger, month) }));
+  const dueThisMonth = roundMoney(standings.reduce((sum, item) => sum + item.standing.charge, 0));
+  const remainingThisMonth = roundMoney(standings.reduce((sum, item) => sum + item.standing.remaining, 0));
+  const arrears = roundMoney(standings.reduce((sum, item) => sum + item.standing.arrears, 0));
   const pending = roundMoney(snapshots.reduce((sum, flat) => sum + flat.ledger.pending, 0));
-  const pendingFlats = snapshots.filter((flat) => flat.ledger.pending > 0).sort((a, b) => b.ledger.pending - a.ledger.pending);
-  const net = roundMoney(collected - expenseTotal);
-  const rate = expected > 0 ? Math.round((applied / expected) * 100) : 0;
+  const expenseTotal = roundMoney(expenses.reduce((sum, expense) => sum + expense.amount, 0));
+  const ordered = [...standings].sort((a, b) => statusRank(a.standing) - statusRank(b.standing) || a.flat.unitNumber.localeCompare(b.flat.unitNumber, "en", { numeric: true }));
+  const recentPayments = allPayments
+    .filter((payment) => isInMonth(payment.paymentDate, month) || (payment.forMonth ? isInMonth(payment.forMonth, month) : false))
+    .slice(0, 8);
 
   const groups = new Map<string, number>();
   for (const expense of expenses) {
@@ -78,25 +82,29 @@ export default async function HomePage({
       />
       <MonthSwitcher month={month} path="/" />
       <section className="mb-4 rounded-3xl bg-primary px-5 py-5 text-primary-foreground">
-        <p className="text-xs font-semibold tracking-[0.14em] uppercase opacity-80">
-          {viewingNow ? "Total pending" : `Pending as of ${formatMonth(month)}`}
-        </p>
-        <p className="font-display mt-1 text-4xl font-semibold tracking-tight">{formatINR(pending)}</p>
-        <p className="mt-1 text-sm opacity-80">
-          {pendingFlats.length === 0 ? "Every active flat is clear." : `${pendingFlats.length} flat${pendingFlats.length === 1 ? "" : "s"} still due`}
-        </p>
+        <p className="text-xs font-semibold tracking-[0.14em] uppercase opacity-80">Collected this month</p>
+        <p className="font-display mt-1 text-4xl font-semibold tracking-tight">{formatINR(collected)}</p>
+        <p className="mt-1 text-sm opacity-80">Year to date {formatINR(collectedYear)}</p>
       </section>
       <div className="grid grid-cols-2 gap-3">
+        <Stat label="Due this month" value={formatINR(dueThisMonth)} hint="Rent plus adjustments" />
         <Stat label="Collected" value={formatINR(collected)} hint="Received this month" tone="good" />
-        <Stat label="Expected" value={formatINR(expected)} hint="Rent plus adjustments" />
-        <Stat label="Expenses" value={formatINR(expenseTotal)} hint="This month" />
-        <Stat label="Net income" value={formatINR(net)} hint="Collected minus expenses" tone={net >= 0 ? "good" : "warn"} />
-        <Stat label="Collection" value={`${rate}%`} hint="Applied against this month's charge" />
-        <Stat label="Applied" value={formatINR(applied)} hint="Confirmed payments tagged to this month" />
+        <Stat label="Still to collect" value={formatINR(remainingThisMonth)} hint="This month's rent left" tone={remainingThisMonth > 0 ? "warn" : "good"} />
+        <Stat label="Earlier arrears" value={formatINR(arrears)} hint="Carried in from previous months" tone={arrears > 0 ? "warn" : "default"} />
       </div>
+      <section className="mt-3 rounded-2xl bg-card px-4 py-4 ring-1 ring-foreground/10">
+        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Total pending</p>
+        <p className="font-display mt-1 text-3xl font-semibold">{formatINR(pending)}</p>
+        <p className="mt-1 text-sm text-muted-foreground">Earlier arrears plus whatever is still unpaid this month.</p>
+      </section>
 
       <section className="mt-6">
-        <h2 className="mb-3 font-display text-xl font-semibold">Expense breakdown</h2>
+        <div className="mb-3 flex items-end justify-between gap-3">
+          <h2 className="font-display text-xl font-semibold">Expenses · {formatINR(expenseTotal)}</h2>
+          <Link href={`/profit?year=${year}`} className="text-sm font-medium text-primary">
+            Profit by flat
+          </Link>
+        </div>
         {groups.size === 0 ? (
           <p className="rounded-2xl bg-card px-4 py-5 text-sm text-muted-foreground ring-1 ring-foreground/10">
             No expenses in {formatMonth(month)}.
@@ -114,48 +122,52 @@ export default async function HomePage({
       </section>
 
       <section className="mt-6">
-        <h2 className="mb-3 font-display text-xl font-semibold">Pending flats</h2>
-        {pendingFlats.length === 0 ? (
-          <p className="rounded-2xl bg-teal-50 px-4 py-5 text-sm text-teal-900 ring-1 ring-teal-200">
-            All collected. Nothing is pending for this period.
-          </p>
+        <h2 className="mb-3 font-display text-xl font-semibold">Flats</h2>
+        {ordered.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No active flats yet.</p>
         ) : (
           <ul className="space-y-2">
-            {pendingFlats.map((flat) => {
-              const wa = whatsAppHref(
-                flat.tenantPhone,
-                reminderText({
-                  tenantName: flat.tenantName,
-                  unitNumber: flat.unitNumber,
-                  pending: flat.ledger.pending,
-                  pendingMonths: flat.ledger.pendingMonths,
-                  partial: flat.ledger.partial,
-                }),
-              );
+            {ordered.map(({ flat, standing }) => {
+              const wa =
+                flat.ledger.pending > 0
+                  ? whatsAppHref(
+                      flat.tenantPhone,
+                      reminderText({
+                        tenantName: flat.tenantName,
+                        unitNumber: flat.unitNumber,
+                        pending: flat.ledger.pending,
+                        pendingMonths: flat.ledger.pendingMonths,
+                        partial: flat.ledger.partial,
+                      }),
+                    )
+                  : null;
               return (
                 <li key={flat.id} className="rounded-2xl bg-card p-4 ring-1 ring-foreground/10">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <Link href={`/flats/${flat.id}`} className="text-base font-semibold">
-                        {flat.unitNumber}
-                      </Link>
-                      <p className="text-sm text-muted-foreground">{flat.tenantName || "No tenant name"}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {pendingLabel(flat.ledger.pendingMonths, flat.ledger.partial)}
-                      </p>
+                  <Link href={`/flats/${flat.id}`} className="block">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-base font-semibold">{flat.unitNumber}</p>
+                        <p className="text-sm text-muted-foreground">{flat.tenantName || "No tenant name"}</p>
+                      </div>
+                      <MonthStatus standing={standing} />
                     </div>
-                    <p className="font-display text-xl font-semibold text-amber-800">{formatINR(flat.ledger.pending)}</p>
-                  </div>
-                  <div className="mt-3 flex gap-2">
-                    <Link href={`/payments/new?flat=${flat.id}`} className={`${buttonLinkClass("secondary")} h-11 flex-1 text-sm`}>
-                      Record
-                    </Link>
-                    {wa ? (
-                      <a href={wa} target="_blank" rel="noreferrer" className={`${buttonLinkClass("ghost")} h-11 flex-1 text-sm`}>
-                        WhatsApp
-                      </a>
-                    ) : null}
-                  </div>
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      Earlier arrears {formatINR(standing.arrears)}
+                      {flat.ledger.pending > 0 ? ` · ${pendingLabel(flat.ledger.pendingMonths, flat.ledger.partial)} overall` : ""}
+                    </p>
+                  </Link>
+                  {standing.status !== "paid" && standing.status !== "none" ? (
+                    <div className="mt-3 flex gap-2">
+                      <Link href={`/payments/new?flat=${flat.id}`} className={`${buttonLinkClass("secondary")} h-11 flex-1 text-sm`}>
+                        Record
+                      </Link>
+                      {wa ? (
+                        <a href={wa} target="_blank" rel="noreferrer" className={`${buttonLinkClass("ghost")} h-11 flex-1 text-sm`}>
+                          WhatsApp
+                        </a>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </li>
               );
             })}
@@ -165,11 +177,11 @@ export default async function HomePage({
 
       <section className="mt-6">
         <h2 className="mb-3 font-display text-xl font-semibold">Recent payments</h2>
-        {monthPayments.length === 0 ? (
+        {recentPayments.length === 0 ? (
           <p className="text-sm text-muted-foreground">No payments recorded for this month yet.</p>
         ) : (
           <ul className="space-y-2">
-            {monthPayments.slice(0, 8).map((payment) => (
+            {recentPayments.map((payment) => (
               <li key={payment.id} className="flex items-center justify-between gap-3 rounded-2xl bg-card px-4 py-3 ring-1 ring-foreground/10">
                 <div>
                   <p className="font-medium">{payment.unitNumber}</p>
@@ -186,6 +198,36 @@ export default async function HomePage({
       </section>
     </div>
   );
+}
+
+function statusRank(standing: MonthStanding): number {
+  if (standing.status === "due") return 0;
+  if (standing.status === "partial") return 1;
+  if (standing.status === "paid") return 2;
+  return 3;
+}
+
+function MonthStatus({ standing }: { standing: MonthStanding }) {
+  if (standing.status === "paid") {
+    return <p className="font-display text-lg font-semibold text-teal-800">Paid</p>;
+  }
+  if (standing.status === "partial") {
+    return (
+      <p className="text-right font-display text-lg font-semibold text-amber-800">
+        Partial
+        <span className="mt-0.5 block text-sm">{formatINR(standing.remaining)}</span>
+      </p>
+    );
+  }
+  if (standing.status === "due") {
+    return (
+      <p className="text-right font-display text-lg font-semibold text-amber-800">
+        Due
+        <span className="mt-0.5 block text-sm">{formatINR(standing.remaining)}</span>
+      </p>
+    );
+  }
+  return <p className="text-sm text-muted-foreground">No charge</p>;
 }
 
 function TenantHome({

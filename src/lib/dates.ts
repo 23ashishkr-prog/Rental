@@ -33,6 +33,40 @@ export function todayIST(now = new Date()): string {
   }).format(now);
 }
 
+function utcCalendar(date: Date): string {
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${month}-${day}`;
+}
+
+/**
+ * Calendar day for a Postgres date or timestamp.
+ * Midnight UTC (how a `date` is usually serialized) keeps that calendar day.
+ * Any other instant uses Asia/Kolkata, so 00:00 IST is not pushed into the previous month.
+ */
+export function calendarDate(value: unknown): string | null {
+  if (value == null || value === "") return null;
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    const midnightUtc =
+      value.getUTCHours() === 0 &&
+      value.getUTCMinutes() === 0 &&
+      value.getUTCSeconds() === 0 &&
+      value.getUTCMilliseconds() === 0;
+    return midnightUtc ? utcCalendar(value) : todayIST(value);
+  }
+  const text = String(value).trim();
+  if (!text) return null;
+  const storedMidnight = /^(\d{4}-\d{2}-\d{2})(?:[ T]00:00:00(?:\.\d+)?(?:Z|[+-]00:?00)?)?$/.exec(text);
+  if (storedMidnight) return storedMidnight[1];
+  if (/[tT]/.test(text)) {
+    const parsed = new Date(text);
+    if (!Number.isNaN(parsed.getTime())) return todayIST(parsed);
+  }
+  const prefix = /^(\d{4}-\d{2}-\d{2})/.exec(text);
+  return prefix ? prefix[1] : null;
+}
+
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "—";
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
@@ -76,6 +110,18 @@ export function formatMonthShort(month: string): string {
 
 export function isInMonth(date: string, month: string): boolean {
   return date.slice(0, 7) === month.slice(0, 7);
+}
+
+export function currentYearIST(now = new Date()): number {
+  return Number(todayIST(now).slice(0, 4));
+}
+
+export function parseYearParam(raw: string | undefined, fallback = currentYearIST()): number {
+  if (raw && /^\d{4}$/.test(raw)) {
+    const year = Number(raw);
+    if (year >= 2000 && year <= 2100) return year;
+  }
+  return fallback;
 }
 
 export function parseMonthParam(raw: string | undefined, fallback = currentMonthKey()): string {

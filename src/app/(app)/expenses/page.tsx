@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { requireAdmin } from "@/lib/auth";
+import { expenseFlatColumnIsReady } from "@/lib/db";
 import { queryExpenses } from "@/lib/queries";
 import { formatDate, formatMonth, parseMonthParam } from "@/lib/dates";
 import { formatINR, roundMoney } from "@/lib/money";
@@ -19,6 +20,7 @@ export default async function ExpensesPage({
   const month = parseMonthParam(one(params.month));
   const q = one(params.q) ?? "";
   const expenses = await queryExpenses(actor, { month, q });
+  const showFlat = expenseFlatColumnIsReady();
   const total = roundMoney(expenses.reduce((sum, expense) => sum + expense.amount, 0));
 
   return (
@@ -49,6 +51,7 @@ export default async function ExpensesPage({
                     <p className="text-sm text-muted-foreground">
                       {formatDate(expense.expenseDate)}
                       {expense.category ? ` · ${expense.category}` : ""}
+                      {showFlat ? ` · ${expense.unitNumber || "Overhead"}` : ""}
                     </p>
                   </div>
                   <p className="font-display text-xl font-semibold">{formatINR(expense.amount)}</p>

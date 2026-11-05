@@ -1,4 +1,5 @@
 import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
+import { calendarDate } from "./dates";
 import { ConfigError } from "./errors";
 
 let client: NeonQueryFunction<false, false> | null = null;
@@ -26,15 +27,7 @@ export function asNumber(value: unknown): number {
 }
 
 export function asDate(value: unknown): string | null {
-  if (value == null) return null;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    const year = value.getUTCFullYear();
-    const month = String(value.getUTCMonth() + 1).padStart(2, "0");
-    const day = String(value.getUTCDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
-  }
-  const match = /^(\d{4}-\d{2}-\d{2})/.exec(String(value));
-  return match ? match[1] : null;
+  return calendarDate(value);
 }
 
 export function asText(value: unknown): string | null {
@@ -51,4 +44,33 @@ export function isUndefinedColumn(error: unknown): boolean {
 
 export function isUniqueViolation(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && (error as { code?: string }).code === "23505");
+}
+
+export function missingColumn(error: unknown, column: string): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: string; message?: string };
+  return candidate.code === "42703" && (candidate.message ?? "").includes(column);
+}
+
+export function isForeignKeyViolation(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && (error as { code?: string }).code === "23503");
+}
+
+let openingBalanceColumnReady = false;
+let expenseFlatColumnReady = false;
+
+export function markOpeningBalanceReady(): void {
+  openingBalanceColumnReady = true;
+}
+
+export function openingBalanceColumnIsReady(): boolean {
+  return openingBalanceColumnReady;
+}
+
+export function markExpenseFlatReady(): void {
+  expenseFlatColumnReady = true;
+}
+
+export function expenseFlatColumnIsReady(): boolean {
+  return expenseFlatColumnReady;
 }

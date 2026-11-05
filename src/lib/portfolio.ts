@@ -31,6 +31,7 @@ export async function loadSnapshots(
     const ledger = buildLedger({
       monthlyRent: flat.monthlyRent,
       rentStartDate: flat.rentStartDate,
+      openingBalance: flat.openingBalance,
       asOfMonth,
       adjustments: flatAdjustments.map((adjustment) => ({
         month: adjustment.month,

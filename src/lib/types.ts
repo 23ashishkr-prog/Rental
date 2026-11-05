@@ -28,6 +28,7 @@ export type FlatRecord = {
   tenantEmail: string | null;
   tenantPhone: string | null;
   active: boolean;
+  openingBalance: number;
   createdAt: string;
 };
 
@@ -53,6 +54,8 @@ export type ExpenseRecord = {
   amount: number;
   expenseDate: string;
   notes: string | null;
+  flatId: number | null;
+  unitNumber: string | null;
   createdAt: string;
 };
 

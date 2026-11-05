@@ -1,7 +1,17 @@
 import "server-only";
 import { ConfigError } from "./errors";
 import { gmailLocalPart, isAdminEmail } from "./email";
-import { asDate, asNumber, asText, isUndefinedColumn, sql } from "./db";
+import {
+  asDate,
+  asNumber,
+  asText,
+  isUndefinedColumn,
+  expenseFlatColumnIsReady,
+  markExpenseFlatReady,
+  markOpeningBalanceReady,
+  missingColumn,
+  sql,
+} from "./db";
 import type {
   Actor,
   AdjustmentRecord,
@@ -50,6 +60,7 @@ function mapFlat(row: Row): FlatRecord {
     tenantEmail: asText(row.tenant_email),
     tenantPhone: asText(row.tenant_phone),
     active: row.active !== false && row.active !== "f" && row.active !== "false",
+    openingBalance: asNumber(row.opening_balance),
     createdAt: String(row.created_at ?? ""),
   };
 }
@@ -84,6 +95,8 @@ function mapExpense(row: Row): ExpenseRecord {
     amount: asNumber(row.amount),
     expenseDate: asDate(row.expense_date) ?? "",
     notes: asText(row.notes),
+    flatId: row.flat_id == null || row.flat_id === "" ? null : Number(row.flat_id),
+    unitNumber: asText(row.unit_number),
     createdAt: String(row.created_at ?? ""),
   };
 }
@@ -185,16 +198,25 @@ export async function queryFlats(
     );
   }
 
-  const rows = await sql().query(
-    `SELECT id, unit_number, tenant_name, monthly_rent, rent_start_date, tenant_email, tenant_phone, active, created_at
-     FROM flats
-     ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-     ORDER BY id`,
-    params,
-  );
-  return (rows as Row[])
-    .map(mapFlat)
-    .sort((a, b) => a.unitNumber.localeCompare(b.unitNumber, "en", { numeric: true }) || a.id - b.id);
+  const filter = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const baseColumns =
+    "id, unit_number, tenant_name, monthly_rent, rent_start_date, tenant_email, tenant_phone, active, created_at";
+  try {
+    const rows = await sql().query(
+      `SELECT ${baseColumns}, opening_balance FROM flats ${filter} ORDER BY id`,
+      params,
+    );
+    markOpeningBalanceReady();
+    return (rows as Row[])
+      .map(mapFlat)
+      .sort((a, b) => a.unitNumber.localeCompare(b.unitNumber, "en", { numeric: true }) || a.id - b.id);
+  } catch (error) {
+    if (!missingColumn(error, "opening_balance")) throw error;
+    const rows = await sql().query(`SELECT ${baseColumns} FROM flats ${filter} ORDER BY id`, params);
+    return (rows as Row[])
+      .map(mapFlat)
+      .sort((a, b) => a.unitNumber.localeCompare(b.unitNumber, "en", { numeric: true }) || a.id - b.id);
+  }
 }
 
 export async function queryPayments(
@@ -279,35 +301,78 @@ export async function queryAdjustments(actor: Actor, flatIds: number[]): Promise
 
 export async function queryExpenses(
   actor: Actor,
-  opts: { month?: string; q?: string; id?: number } = {},
+  opts: { month?: string; year?: number; q?: string; id?: number; flatId?: number; limit?: number | null } = {},
 ): Promise<ExpenseRecord[]> {
   if (!actor.isAdmin) return [];
-  const params: unknown[] = [];
-  const where: string[] = [];
-  if (opts.id) {
-    params.push(opts.id);
-    where.push(`id = $${params.length}`);
+  const run = async (linked: boolean) => {
+    const params: unknown[] = [];
+    const where: string[] = [];
+    const expense = linked ? "e" : "expenses";
+    const col = (name: string) => (linked ? `e.${name}` : name);
+    if (opts.id) {
+      params.push(opts.id);
+      where.push(`${col("id")} = $${params.length}`);
+    }
+    if (opts.flatId && linked) {
+      params.push(opts.flatId);
+      where.push(`e.flat_id = $${params.length}`);
+    }
+    if (opts.month) {
+      params.push(opts.month.slice(0, 7));
+      where.push(`to_char(${col("expense_date")}, 'YYYY-MM') = $${params.length}`);
+    }
+    if (opts.year) {
+      params.push(`${opts.year}-01-01`);
+      where.push(`${col("expense_date")} >= $${params.length}`);
+      params.push(`${opts.year + 1}-01-01`);
+      where.push(`${col("expense_date")} < $${params.length}`);
+    }
+    if (opts.q?.trim()) {
+      params.push(likePattern(opts.q));
+      const token = `$${params.length}`;
+      const flatMatch = linked ? ` OR coalesce(f.unit_number, '') ILIKE ${token} ESCAPE '\\'` : "";
+      where.push(
+        `(${col("title")} ILIKE ${token} ESCAPE '\\' OR coalesce(${col("category")}, '') ILIKE ${token} ESCAPE '\\' OR coalesce(${col("notes")}, '') ILIKE ${token} ESCAPE '\\'${flatMatch})`,
+      );
+    }
+    const limited = opts.limit !== null;
+    if (limited) params.push(opts.limit ?? 400);
+    const sqlText = linked
+      ? `SELECT e.id, e.title, e.category, e.amount, e.expense_date, e.notes, e.created_at, e.flat_id, f.unit_number
+         FROM expenses e
+         LEFT JOIN flats f ON f.id = e.flat_id
+         ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+         ORDER BY e.expense_date DESC, e.id DESC
+         ${limited ? `LIMIT $${params.length}` : ""}`
+      : `SELECT id, title, category, amount, expense_date, notes, created_at
+         FROM ${expense}
+         ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+         ORDER BY expense_date DESC, id DESC
+         ${limited ? `LIMIT $${params.length}` : ""}`;
+    return sql().query(sqlText, params);
+  };
+  try {
+    const rows = await run(true);
+    markExpenseFlatReady();
+    return (rows as Row[]).map(mapExpense);
+  } catch (error) {
+    if (!missingColumn(error, "flat_id")) throw error;
+    if (opts.flatId) return [];
+    const rows = await run(false);
+    return (rows as Row[]).map(mapExpense);
   }
-  if (opts.month) {
-    params.push(opts.month.slice(0, 7));
-    where.push(`to_char(expense_date, 'YYYY-MM') = $${params.length}`);
+}
+
+export async function expenseFlatColumnExists(): Promise<boolean> {
+  if (expenseFlatColumnIsReady()) return true;
+  try {
+    await sql().query(`SELECT flat_id FROM expenses LIMIT 0`);
+    markExpenseFlatReady();
+    return true;
+  } catch (error) {
+    if (missingColumn(error, "flat_id")) return false;
+    throw error;
   }
-  if (opts.q?.trim()) {
-    params.push(likePattern(opts.q));
-    const token = `$${params.length}`;
-    where.push(
-      `(title ILIKE ${token} ESCAPE '\\' OR coalesce(category, '') ILIKE ${token} ESCAPE '\\' OR coalesce(notes, '') ILIKE ${token} ESCAPE '\\')`,
-    );
-  }
-  const rows = await sql().query(
-    `SELECT id, title, category, amount, expense_date, notes, created_at
-     FROM expenses
-     ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-     ORDER BY expense_date DESC, id DESC
-     LIMIT 400`,
-    params,
-  );
-  return (rows as Row[]).map(mapExpense);
 }
 
 export async function countPendingPayments(actor: Actor): Promise<number> {
