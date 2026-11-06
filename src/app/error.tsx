@@ -1,7 +1,7 @@
 "use client";
 
 export default function ErrorPage({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
-  const migration = /password_hash|DATABASE_URL|AUTH_SECRET|flat_id|opening_balance|LEDGER_START|rent_changes/.test(error.message);
+  const migration = /password_hash|DATABASE_URL|AUTH_SECRET|flat_id|opening_balance|security_deposit|LEDGER_START|rent_changes/.test(error.message);
   return (
     <main className="mx-auto flex min-h-dvh max-w-lg flex-col justify-center px-5">
       <h1 className="font-display text-3xl font-semibold">Something went wrong</h1>

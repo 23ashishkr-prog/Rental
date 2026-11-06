@@ -5,6 +5,7 @@ import { isImplicitForMonthStamp, PREVIOUS_RENT_NOTE, rentChangeAmountRepairs } 
 import {
   asDate,
   asNumber,
+  asOptionalNumber,
   asText,
   isUndefinedColumn,
   isUndefinedTable,
@@ -155,6 +156,9 @@ function mapFlat(row: Row): FlatRecord {
     tenantPhone: asText(row.tenant_phone),
     active: row.active !== false && row.active !== "f" && row.active !== "false",
     openingBalance: asNumber(row.opening_balance),
+    securityDeposit: Object.prototype.hasOwnProperty.call(row, "security_deposit")
+      ? asOptionalNumber(row.security_deposit)
+      : null,
     createdAt: String(row.created_at ?? ""),
   };
 }
@@ -320,21 +324,35 @@ export async function queryFlats(
   const filter = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const baseColumns =
     "id, unit_number, tenant_name, monthly_rent, rent_start_date, tenant_email, tenant_phone, active, created_at";
+  const sortFlats = (rows: Row[]) =>
+    rows
+      .map(mapFlat)
+      .sort((a, b) => a.unitNumber.localeCompare(b.unitNumber, "en", { numeric: true }) || a.id - b.id);
   try {
     const rows = await sql().query(
-      `SELECT ${baseColumns}, opening_balance FROM flats ${filter} ORDER BY id`,
+      `SELECT ${baseColumns}, opening_balance, security_deposit FROM flats ${filter} ORDER BY id`,
       params,
     );
     markOpeningBalanceReady();
-    return (rows as Row[])
-      .map(mapFlat)
-      .sort((a, b) => a.unitNumber.localeCompare(b.unitNumber, "en", { numeric: true }) || a.id - b.id);
+    return sortFlats(rows as Row[]);
   } catch (error) {
+    if (missingColumn(error, "security_deposit")) {
+      try {
+        const rows = await sql().query(
+          `SELECT ${baseColumns}, opening_balance FROM flats ${filter} ORDER BY id`,
+          params,
+        );
+        markOpeningBalanceReady();
+        return sortFlats(rows as Row[]);
+      } catch (inner) {
+        if (!missingColumn(inner, "opening_balance")) throw inner;
+        const rows = await sql().query(`SELECT ${baseColumns} FROM flats ${filter} ORDER BY id`, params);
+        return sortFlats(rows as Row[]);
+      }
+    }
     if (!missingColumn(error, "opening_balance")) throw error;
     const rows = await sql().query(`SELECT ${baseColumns} FROM flats ${filter} ORDER BY id`, params);
-    return (rows as Row[])
-      .map(mapFlat)
-      .sort((a, b) => a.unitNumber.localeCompare(b.unitNumber, "en", { numeric: true }) || a.id - b.id);
+    return sortFlats(rows as Row[]);
   }
 }
 

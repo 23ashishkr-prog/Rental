@@ -7,6 +7,7 @@ import { one } from "@/lib/search";
 import { MonthSwitcher } from "@/components/month-switcher";
 import { StatusBadge } from "@/components/status-badge";
 import { PageHeader, buttonLinkClass, controlClass } from "@/components/ui-bits";
+import { FilterForm } from "@/components/filter-form";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +46,7 @@ export default async function PaymentsPage({
         path="/payments"
         extra={{ status: status === "all" ? undefined : status, q: q || undefined, flat: flatId ? String(flatId) : undefined }}
       />
-      <form className="mb-4 space-y-3" action="/payments">
+      <FilterForm action="/payments" className="mb-4 space-y-3">
         <input type="hidden" name="month" value={month.slice(0, 7)} />
         <input name="q" defaultValue={q} placeholder="Search flat, reference, notes" className={controlClass} />
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -67,9 +68,9 @@ export default async function PaymentsPage({
           ) : null}
         </div>
         <button type="submit" className={`${buttonLinkClass("secondary")} w-full`}>
-          Filter
+          Search
         </button>
-      </form>
+      </FilterForm>
       {payments.length === 0 ? (
         <p className="text-sm text-muted-foreground">No payments for this filter.</p>
       ) : (

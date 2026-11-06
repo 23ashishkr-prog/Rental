@@ -27,6 +27,7 @@ export type FlatInput = {
   rentStartDate: string | null;
   active: boolean;
   openingBalance: number;
+  securityDeposit: number | null;
 };
 
 export type PaymentInput = {
@@ -55,6 +56,9 @@ const EXPENSE_FLAT_MIGRATION =
 const OPENING_BALANCE_MIGRATION =
   "Flats cannot store an opening balance yet. In the Neon SQL editor, run migrations/003_flat_opening_balance.sql: ALTER TABLE public.flats ADD COLUMN IF NOT EXISTS opening_balance numeric(12,2) NOT NULL DEFAULT 0;";
 
+const SECURITY_DEPOSIT_MIGRATION =
+  "Flats cannot store a security deposit yet. In the Neon SQL editor, run migrations/006_security_deposit.sql: ALTER TABLE public.flats ADD COLUMN IF NOT EXISTS security_deposit numeric(12,2);";
+
 const RENT_CHANGES_MIGRATION =
   "Rent increases are not stored yet. In the Neon SQL editor, run migrations/004_rent_changes.sql: CREATE TABLE IF NOT EXISTS public.rent_changes (id bigserial PRIMARY KEY, flat_id bigint NOT NULL REFERENCES public.flats (id), effective_month date NOT NULL, monthly_rent numeric(12,2) NOT NULL, note text, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE (flat_id, effective_month));";
 
@@ -79,6 +83,28 @@ export async function insertFlat(actor: Actor, input: FlatInput): Promise<number
   ];
   try {
     const rows = await sql().query(
+      `INSERT INTO flats (unit_number, tenant_name, monthly_rent, rent_start_date, tenant_email, tenant_phone, active, opening_balance, security_deposit)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id`,
+      [...values, input.openingBalance, input.securityDeposit],
+    );
+    markOpeningBalanceReady();
+    return Number((rows[0] as { id: unknown }).id);
+  } catch (error) {
+    if (missingColumn(error, "security_deposit")) {
+      if (input.securityDeposit != null) throw new ConfigError(SECURITY_DEPOSIT_MIGRATION);
+      return insertFlatWithoutDeposit(values, input);
+    }
+    if (!missingColumn(error, "opening_balance")) throw error;
+    if (input.openingBalance !== 0) throw new ConfigError(OPENING_BALANCE_MIGRATION);
+    if (input.securityDeposit != null) throw new ConfigError(SECURITY_DEPOSIT_MIGRATION);
+    return insertFlatBase(values);
+  }
+}
+
+async function insertFlatWithoutDeposit(values: unknown[], input: FlatInput): Promise<number> {
+  try {
+    const rows = await sql().query(
       `INSERT INTO flats (unit_number, tenant_name, monthly_rent, rent_start_date, tenant_email, tenant_phone, active, opening_balance)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id`,
@@ -89,19 +115,23 @@ export async function insertFlat(actor: Actor, input: FlatInput): Promise<number
   } catch (error) {
     if (!missingColumn(error, "opening_balance")) throw error;
     if (input.openingBalance !== 0) throw new ConfigError(OPENING_BALANCE_MIGRATION);
-    const rows = await sql().query(
-      `INSERT INTO flats (unit_number, tenant_name, monthly_rent, rent_start_date, tenant_email, tenant_phone, active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id`,
-      values,
-    );
-    return Number((rows[0] as { id: unknown }).id);
+    return insertFlatBase(values);
   }
+}
+
+async function insertFlatBase(values: unknown[]): Promise<number> {
+  const rows = await sql().query(
+    `INSERT INTO flats (unit_number, tenant_name, monthly_rent, rent_start_date, tenant_email, tenant_phone, active)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id`,
+    values,
+  );
+  return Number((rows[0] as { id: unknown }).id);
 }
 
 export async function updateFlat(actor: Actor, id: number, input: FlatInput): Promise<void> {
   assertAdmin(actor);
-  const values = [
+  const base = [
     input.unitNumber,
     input.tenantName,
     input.monthlyRent,
@@ -109,8 +139,33 @@ export async function updateFlat(actor: Actor, id: number, input: FlatInput): Pr
     input.tenantEmail,
     input.tenantPhone,
     input.active,
-    id,
   ];
+  try {
+    const rows = await sql().query(
+      `UPDATE flats
+       SET unit_number = $1, tenant_name = $2, monthly_rent = $3, rent_start_date = $4,
+           tenant_email = $5, tenant_phone = $6, active = $7, opening_balance = $8, security_deposit = $9
+       WHERE id = $10
+       RETURNING id`,
+      [...base, input.openingBalance, input.securityDeposit, id],
+    );
+    markOpeningBalanceReady();
+    if (rows.length === 0) throw new AppError("That flat could not be found.");
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    if (missingColumn(error, "security_deposit")) {
+      if (input.securityDeposit != null) throw new ConfigError(SECURITY_DEPOSIT_MIGRATION);
+      await updateFlatWithoutDeposit(id, base, input);
+      return;
+    }
+    if (!missingColumn(error, "opening_balance")) throw error;
+    if (input.openingBalance !== 0) throw new ConfigError(OPENING_BALANCE_MIGRATION);
+    if (input.securityDeposit != null) throw new ConfigError(SECURITY_DEPOSIT_MIGRATION);
+    await updateFlatBase(id, base);
+  }
+}
+
+async function updateFlatWithoutDeposit(id: number, base: unknown[], input: FlatInput): Promise<void> {
   try {
     const rows = await sql().query(
       `UPDATE flats
@@ -118,17 +173,7 @@ export async function updateFlat(actor: Actor, id: number, input: FlatInput): Pr
            tenant_email = $5, tenant_phone = $6, active = $7, opening_balance = $8
        WHERE id = $9
        RETURNING id`,
-      [
-        input.unitNumber,
-        input.tenantName,
-        input.monthlyRent,
-        input.rentStartDate,
-        input.tenantEmail,
-        input.tenantPhone,
-        input.active,
-        input.openingBalance,
-        id,
-      ],
+      [...base, input.openingBalance, id],
     );
     markOpeningBalanceReady();
     if (rows.length === 0) throw new AppError("That flat could not be found.");
@@ -136,16 +181,20 @@ export async function updateFlat(actor: Actor, id: number, input: FlatInput): Pr
     if (error instanceof AppError) throw error;
     if (!missingColumn(error, "opening_balance")) throw error;
     if (input.openingBalance !== 0) throw new ConfigError(OPENING_BALANCE_MIGRATION);
-    const rows = await sql().query(
-      `UPDATE flats
-       SET unit_number = $1, tenant_name = $2, monthly_rent = $3, rent_start_date = $4,
-           tenant_email = $5, tenant_phone = $6, active = $7
-       WHERE id = $8
-       RETURNING id`,
-      values,
-    );
-    if (rows.length === 0) throw new AppError("That flat could not be found.");
+    await updateFlatBase(id, base);
   }
+}
+
+async function updateFlatBase(id: number, base: unknown[]): Promise<void> {
+  const rows = await sql().query(
+    `UPDATE flats
+     SET unit_number = $1, tenant_name = $2, monthly_rent = $3, rent_start_date = $4,
+         tenant_email = $5, tenant_phone = $6, active = $7
+     WHERE id = $8
+     RETURNING id`,
+    [...base, id],
+  );
+  if (rows.length === 0) throw new AppError("That flat could not be found.");
 }
 
 export async function deleteFlat(actor: Actor, id: number): Promise<void> {

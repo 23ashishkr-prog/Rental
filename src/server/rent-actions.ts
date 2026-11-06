@@ -62,7 +62,20 @@ function flatFromForm(formData: FormData): FlatInput {
     rentStartDate: readOptionalDate(formData, "rent_start_date"),
     active,
     openingBalance: readOpeningBalance(formData),
+    securityDeposit: readSecurityDeposit(formData),
   };
+}
+
+function readSecurityDeposit(formData: FormData): number | null {
+  const raw = readString(formData, "security_deposit").replace(/[₹,\s]/g, "");
+  if (!raw) return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new AppError("Enter the security deposit as a number, or leave it blank.");
+  }
+  const rounded = roundMoney(value);
+  if (rounded > 10_000_000) throw new AppError("That security deposit is too large.");
+  return rounded;
 }
 
 function readOpeningBalance(formData: FormData): number {

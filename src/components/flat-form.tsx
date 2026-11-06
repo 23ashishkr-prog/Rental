@@ -40,9 +40,23 @@ export function FlatForm({ flat }: { flat?: FlatRecord }) {
         />
       </Field>
       <Field
+        label="Security deposit (₹)"
+        htmlFor="security_deposit"
+        hint="Optional. Money this tenant already gave you to hold. It is not rent, and it does not change what they owe."
+      >
+        <input
+          id="security_deposit"
+          name="security_deposit"
+          inputMode="decimal"
+          defaultValue={flat?.securityDeposit == null ? "" : String(flat.securityDeposit)}
+          placeholder="Leave blank if not entered"
+          className={controlClass}
+        />
+      </Field>
+      <Field
         label="Opening balance (₹)"
         htmlFor="opening_balance"
-        hint="Prior dues at the books-open month. Leave 0 when months before that are already paid. Negative is a credit."
+        hint="Older unpaid rent you want to carry in. Leave 0 when those months are already paid. A minus number is extra money already paid."
       >
         <input
           id="opening_balance"
