@@ -388,8 +388,39 @@ function settledHistory(
 }
 
 /**
- * Rent is charged in full from the later of rent_start_date and the books-open month
- * (LEDGER_START_DATE, default 2026-04-01) through asOfMonth.
+ * First month this flat has a ledger row.
+ * Nothing is listed before the books-open month. On or after that, the row starts
+ * at the earliest of the rent start, a counted payment's assigned month, and a
+ * rent change, through asOf. A rent start before the books open still opens the
+ * ledger on the books-open month. A payment or rent change before the books open
+ * does not. Pending and rejected payments are not activity.
+ */
+function firstChargedMonth(input: {
+  rentMonth: string | null;
+  open: string;
+  asOf: string;
+  payments: LedgerPayment[];
+  changes: RentRate[];
+}): string | null {
+  let earliest: string | null = null;
+  const consider = (month: string | null) => {
+    if (!month || month < input.open || month > input.asOf) return;
+    if (!earliest || month < earliest) earliest = month;
+  };
+  if (input.rentMonth) consider(input.rentMonth < input.open ? input.open : input.rentMonth);
+  for (const payment of input.payments) {
+    if (!paymentCounts(payment.status)) continue;
+    consider(assignedMonth(payment));
+  }
+  for (const change of input.changes) consider(monthOf(change.effectiveMonth));
+  return earliest;
+}
+
+/**
+ * Every flat uses the same window. Rent is charged from the earliest of
+ * rent_start_date, a confirmed payment, and a rent change, and never before
+ * the books-open month (LEDGER_START_DATE, default 2026-04-01), through asOfMonth.
+ * A rent start before the books open still begins on that books-open month.
  * Earlier months, back to rent_start_date, are treated as fully paid with a zero opening balance.
  * That history is one summary line, not payment rows.
  * Confirmed payments (and rows with a null status) apply to an explicit for_month,
@@ -412,8 +443,14 @@ export function buildLedger(input: {
   const asOf = monthStart(input.asOfMonth);
   const open = monthStart(input.booksOpenDate ?? ledgerStartMonth());
   const rentMonth = input.rentStartDate ? monthStart(input.rentStartDate) : null;
-  const start = rentMonth && rentMonth > open ? rentMonth : rentMonth ? open : null;
   const changes = effectiveRentChanges(input.rentChanges ?? []);
+  const start = firstChargedMonth({
+    rentMonth,
+    open,
+    asOf,
+    payments: input.payments ?? [],
+    changes,
+  });
   const openingPaise = toPaise(input.openingBalance ?? 0);
 
   const adjustments = new Map<string, number>();

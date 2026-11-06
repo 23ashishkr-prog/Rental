@@ -6,7 +6,8 @@ export const DEFAULT_LEDGER_START = "2026-04-01";
 
 /**
  * First month that can accrue rent, from LEDGER_START_DATE or the default.
- * Each flat's ledger then starts at the later of this month and its own rent_start_date.
+ * A flat's ledger then starts at the earliest rent start, payment, or rent
+ * change on or after this month. A rent start before it still opens here.
  */
 export function ledgerStartMonth(): string {
   const raw = process.env.LEDGER_START_DATE?.trim();

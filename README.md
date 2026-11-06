@@ -46,7 +46,7 @@ ALTER TABLE public.flats
 
 `flat_id` empty means a general cost (staff salary, for example). `opening_balance` defaults to 0. The same statements are in `migrations/002_expense_flat.sql` and `migrations/003_flat_opening_balance.sql`.
 
-`LEDGER_START_DATE` (default `2026-04-01`) is the first month rent can be charged. Each flat starts at the later of that month and its `rent_start_date`. Months from `rent_start_date` through the month before it are shown as one line, **Paid (before Apr 2026)**, and are not pending. No payment rows are inserted for that history. Set `LEDGER_START_DATE` in Vercel only if the books should open on a different month.
+`LEDGER_START_DATE` (default `2026-04-01`) is the first month rent can be charged. Every flat uses the same rule: the ledger runs from the earliest of its rent start, a confirmed payment, or a rent change, and never before that books-open month, through the month being viewed. A rent start before the books open still begins the ledger on the books-open month. Months from `rent_start_date` through the month before the books open are one line, **Paid (before Apr 2026)**, and are not pending. No payment rows are inserted for that history. Set `LEDGER_START_DATE` in Vercel only if the books should open on a different month.
 
 Rent for a month is the latest `rent_changes` row with `effective_month` on or before that month. If there is no row, the flat's `monthly_rent` is used. Add increases from the flat page. The optional checkbox also stores the latest amount on the flat and keeps the previous amount for earlier months. The app does not copy that new amount back onto months before the effective month. Run this once:
 

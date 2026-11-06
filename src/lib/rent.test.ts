@@ -119,22 +119,27 @@ test("adjustments add to the month and a negative adjustment is a discount", () 
   assert.equal(discount.months[0].charge, 0);
 });
 
-test("rent before the start date is not charged and early payments become credit", () => {
+test("a payment before the rent start still opens that month when the books are already open", () => {
   const ledger = buildLedger({
     monthlyRent: rent,
     rentStartDate: "2026-03-01",
     asOfMonth: "2026-03-01",
     booksOpenDate: booksOpen,
     payments: [
-      { forMonth: "2026-01-01", paymentDate: "2026-01-01", amount: 4000, status: "confirmed" },
+      { forMonth: null, paymentDate: "2026-01-04", amount: 4000, status: "confirmed" },
     ],
   });
-  assert.equal(ledger.months.length, 1);
-  assert.equal(ledger.pending, 6000);
-  assert.equal(ledger.months[0].opening, -4000);
+  assert.deepEqual(
+    ledger.months.map((month) => month.month),
+    ["2026-01-01", "2026-02-01", "2026-03-01"],
+  );
+  assert.equal(ledger.months[0].paid, 4000);
+  assert.equal(ledger.months[0].rent, rent);
+  assert.equal(ledger.months[1].paid, 0);
+  assert.equal(ledger.pending, 26000);
 });
 
-test("no start date does not accrue rent", () => {
+test("a payment with no rent start date still opens that month", () => {
   const ledger = buildLedger({
     monthlyRent: rent,
     rentStartDate: null,
@@ -143,9 +148,23 @@ test("no start date does not accrue rent", () => {
       { forMonth: null, paymentDate: "2026-08-02", amount: 500, status: "confirmed" },
     ],
   });
-  assert.equal(ledger.pending, 0);
-  assert.equal(ledger.credit, 500);
+  assert.equal(ledger.months.length, 1);
+  assert.equal(ledger.months[0].month, "2026-08-01");
+  assert.equal(ledger.months[0].paid, 500);
+  assert.equal(ledger.months[0].rent, rent);
+  assert.equal(ledger.pending, rent - 500);
+  assert.equal(ledger.credit, 0);
+});
+
+test("no rent start, payment, or rent change does not accrue rent", () => {
+  const ledger = buildLedger({
+    monthlyRent: rent,
+    rentStartDate: null,
+    asOfMonth: "2026-08-01",
+  });
   assert.equal(ledger.months.length, 0);
+  assert.equal(ledger.pending, 0);
+  assert.equal(ledger.totalPaid, 0);
 });
 
 test("as-of before start has no charge", () => {
@@ -432,6 +451,184 @@ test("replacing the flat rent does not copy that new amount onto the months befo
     }),
     { effectiveMonth: "2025-07-01", monthlyRent: 21000 },
   );
+});
+
+test("flat 101 keeps april and may at the stored rent change and pays each month on its own date", () => {
+  const payments = [
+    ["2026-04-07", 11000],
+    ["2026-05-02", 11000],
+    ["2026-06-02", 11000],
+    ["2026-07-03", 12000],
+    ["2026-08-02", 12000],
+    ["2026-09-02", 12000],
+    ["2026-10-03", 12000],
+  ].map(([paymentDate, amount]) => ({
+    forMonth: null,
+    paymentDate: String(paymentDate),
+    amount: Number(amount),
+    status: "confirmed" as const,
+  }));
+  const ledger = buildLedger({
+    monthlyRent: 12000,
+    rentStartDate: "2026-07-01",
+    asOfMonth: "2026-11-01",
+    rentChanges: [
+      { effectiveMonth: "2026-04-01", monthlyRent: 11000, note: null },
+      { effectiveMonth: "2026-06-01", monthlyRent: 12000, note: null },
+    ],
+    payments,
+  });
+  const row = (month: string) => ledger.months.find((item) => item.month === month);
+  assert.equal(ledger.settledBefore, null);
+  assert.equal(ledger.months[0].month, "2026-04-01");
+  assert.equal(ledger.months.at(-1)?.month, "2026-11-01");
+  assert.equal(row("2026-04-01")?.rent, 11000);
+  assert.equal(row("2026-04-01")?.paid, 11000);
+  assert.equal(row("2026-05-01")?.rent, 11000);
+  assert.equal(row("2026-05-01")?.paid, 11000);
+  assert.equal(row("2026-06-01")?.rent, 12000);
+  assert.equal(row("2026-06-01")?.paid, 11000);
+  for (const month of ["2026-07-01", "2026-08-01", "2026-09-01", "2026-10-01"]) {
+    assert.equal(row(month)?.rent, 12000);
+    assert.equal(row(month)?.paid, 12000);
+  }
+  assert.equal(row("2026-11-01")?.rent, 12000);
+  assert.equal(row("2026-11-01")?.paid, 0);
+  assert.equal(ledger.pending, 13000);
+});
+
+test("flat 102 lists april through june even though rent starts on 5 july", () => {
+  const payments = [
+    ["2026-04-18", 9100],
+    ["2026-05-17", 9100],
+    ["2026-06-20", 9100],
+    ["2026-07-02", 11500],
+    ["2026-08-09", 11500],
+    ["2026-10-17", 11500],
+  ].map(([paymentDate, amount]) => ({
+    forMonth: null,
+    paymentDate: String(paymentDate),
+    amount: Number(amount),
+    status: "confirmed" as const,
+  }));
+  const ledger = buildLedger({
+    monthlyRent: 11500,
+    rentStartDate: "2026-07-05",
+    asOfMonth: "2026-11-01",
+    payments,
+  });
+  const row = (month: string) => ledger.months.find((item) => item.month === month);
+  assert.equal(ledger.settledBefore, null);
+  assert.deepEqual(
+    ledger.months.map((month) => month.month),
+    ["2026-04-01", "2026-05-01", "2026-06-01", "2026-07-01", "2026-08-01", "2026-09-01", "2026-10-01", "2026-11-01"],
+  );
+  for (const month of ["2026-04-01", "2026-05-01", "2026-06-01"]) {
+    assert.equal(row(month)?.rent, 11500);
+    assert.equal(row(month)?.paid, 9100);
+  }
+  assert.equal(row("2026-07-01")?.paid, 11500);
+  assert.equal(row("2026-08-01")?.paid, 11500);
+  assert.equal(row("2026-09-01")?.rent, 11500);
+  assert.equal(row("2026-09-01")?.paid, 0);
+  assert.equal(row("2026-10-01")?.paid, 11500);
+  assert.equal(row("2026-11-01")?.paid, 0);
+  assert.equal(ledger.pending, 30200);
+});
+
+test("a rent start before april 2026 still opens on april and keeps one paid bucket", () => {
+  const ledger = buildLedger({
+    monthlyRent: 14000,
+    rentStartDate: "2025-07-01",
+    asOfMonth: "2026-11-01",
+    payments: [
+      { forMonth: null, paymentDate: "2026-03-20", amount: 14000, status: "confirmed" },
+      { forMonth: null, paymentDate: "2026-05-04", amount: 14000, status: "confirmed" },
+    ],
+  });
+  assert.equal(ledger.settledBefore?.label, "Paid (before Apr 2026)");
+  assert.equal(ledger.settledBefore?.fromMonth, "2025-07-01");
+  assert.equal(ledger.settledBefore?.throughMonth, "2026-03-01");
+  assert.equal(ledger.settledBefore?.monthCount, 9);
+  assert.equal(ledger.settledBefore?.amount, 126000);
+  assert.equal(ledger.months[0].month, "2026-04-01");
+  assert.equal(ledger.months[0].opening, 0);
+  assert.equal(ledger.months[0].paid, 0);
+  assert.equal(ledger.months.find((month) => month.month === "2026-05-01")?.paid, 14000);
+  assert.equal(ledger.months.at(-1)?.month, "2026-11-01");
+  assert.equal(ledger.pending, 98000);
+});
+
+test("a payment before the books open does not open months ahead of the rent start", () => {
+  const ledger = buildLedger({
+    monthlyRent: 11500,
+    rentStartDate: "2026-07-05",
+    asOfMonth: "2026-11-01",
+    payments: [{ forMonth: null, paymentDate: "2026-03-18", amount: 9100, status: "confirmed" }],
+  });
+  assert.equal(ledger.settledBefore, null);
+  assert.equal(ledger.months[0].month, "2026-07-01");
+  assert.equal(ledger.months.every((month) => month.paid === 0), true);
+});
+
+test("a pending payment before the rent start does not open that month", () => {
+  const ledger = buildLedger({
+    monthlyRent: 11500,
+    rentStartDate: "2026-07-05",
+    asOfMonth: "2026-08-01",
+    payments: [{ forMonth: null, paymentDate: "2026-04-18", amount: 9100, status: "pending" }],
+  });
+  assert.equal(ledger.months[0].month, "2026-07-01");
+  assert.equal(ledger.totalPaid, 0);
+});
+
+test("an explicit for-month before the rent start takes the payment and opens that month", () => {
+  const ledger = buildLedger({
+    monthlyRent: 11500,
+    rentStartDate: "2026-07-05",
+    asOfMonth: "2026-07-01",
+    payments: [
+      {
+        forMonth: "2026-04-01",
+        forMonthExplicit: true,
+        paymentDate: "2026-07-02",
+        amount: 9100,
+        status: "confirmed",
+      },
+    ],
+  });
+  assert.equal(ledger.months[0].month, "2026-04-01");
+  assert.equal(ledger.months.find((month) => month.month === "2026-04-01")?.paid, 9100);
+  assert.equal(ledger.months.find((month) => month.month === "2026-07-01")?.paid, 0);
+});
+
+test("a rent change before the rent start opens those months at the changed rent", () => {
+  const ledger = buildLedger({
+    monthlyRent: 12000,
+    rentStartDate: "2026-08-01",
+    asOfMonth: "2026-08-01",
+    rentChanges: [{ effectiveMonth: "2026-05-01", monthlyRent: 9000 }],
+  });
+  assert.deepEqual(
+    ledger.months.map((month) => month.month),
+    ["2026-05-01", "2026-06-01", "2026-07-01", "2026-08-01"],
+  );
+  assert.equal(ledger.months[0].rent, 9000);
+  assert.equal(ledger.months[3].rent, 9000);
+  assert.equal(ledger.months.every((month) => month.paid === 0), true);
+});
+
+test("a generated copy of the new rent does not open months before the real change", () => {
+  const ledger = buildLedger({
+    monthlyRent: 4000,
+    rentStartDate: "2026-07-01",
+    asOfMonth: "2026-08-01",
+    rentChanges: [
+      { effectiveMonth: "2026-04-01", monthlyRent: 4000, note: "Previous rent" },
+      { effectiveMonth: "2026-07-01", monthlyRent: 4000, note: "increase" },
+    ],
+  });
+  assert.equal(ledger.months[0].month, "2026-07-01");
 });
 
 test("pending label describes partial months", () => {
