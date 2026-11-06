@@ -24,7 +24,7 @@ export type ProfitFlatInput = {
   rentStartDate: string | null;
   active: boolean;
   openingBalance?: number;
-  rentChanges?: { effectiveMonth: string; monthlyRent: number }[];
+  rentChanges?: { effectiveMonth: string; monthlyRent: number; note?: string | null }[];
 };
 
 export type ProfitPaymentInput = {

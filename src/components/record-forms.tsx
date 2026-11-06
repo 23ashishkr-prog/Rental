@@ -114,8 +114,8 @@ export function RentChangeForm({
         <input id="rent_note" name="note" defaultValue={change?.note ?? ""} className={controlClass} placeholder="Renewal, market revision…" />
       </Field>
       <label className="flex min-h-12 items-start gap-3 text-sm font-medium">
-        <input type="checkbox" name="update_current" value="on" defaultChecked className="mt-1 size-5 accent-primary" />
-        <span>Also save the latest rent on the flat. Earlier months keep the previous amount.</span>
+        <input type="checkbox" name="update_current" value="on" className="mt-1 size-5 accent-primary" />
+        <span>Also save this amount as the flat&apos;s current rent. Months before the effective month keep the previous rent.</span>
       </label>
       <FormMessage state={state} />
       <SubmitButton>{change ? "Save rent change" : "Add rent increase"}</SubmitButton>

@@ -6,7 +6,7 @@ import { currentMonthKey, formatDate, formatMonth } from "@/lib/dates";
 import { formatINR, roundMoney } from "@/lib/money";
 import { isPersonalCategory } from "@/lib/categories";
 import { expenseFlatColumnExists, queryExpenses } from "@/lib/queries";
-import { displayedRent, monthStanding, pendingLabel, type SettledBefore } from "@/lib/rent";
+import { displayedRent, effectiveRentChanges, monthStanding, pendingLabel, type SettledBefore } from "@/lib/rent";
 import { rentChangesTableIsReady } from "@/lib/db";
 import { reminderText } from "@/lib/reminders";
 import { whatsAppHref } from "@/lib/upi";
@@ -369,7 +369,8 @@ function RentHistory({
   tableReady: boolean;
 }) {
   const editing = changes.find((change) => String(change.id) === editingId);
-  const timeline = [...changes].sort((a, b) => b.effectiveMonth.localeCompare(a.effectiveMonth) || b.id - a.id);
+  const visible = effectiveRentChanges(changes);
+  const timeline = [...visible].sort((a, b) => b.effectiveMonth.localeCompare(a.effectiveMonth) || b.id - a.id);
   return (
     <section className="space-y-3">
       <h2 className="font-display text-xl font-semibold">Rent history</h2>

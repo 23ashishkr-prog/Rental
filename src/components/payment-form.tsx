@@ -1,10 +1,15 @@
 "use client";
 
+import { useState } from "react";
 import { useActionState } from "react";
 import { savePaymentAction } from "@/server/rent-actions";
 import { Field, FormMessage, controlClass } from "@/components/ui-bits";
 import { SubmitButton } from "@/components/submit-button";
 import type { FlatRecord, PaymentRecord } from "@/lib/types";
+
+function monthKey(value: string): string {
+  return value.slice(0, 7);
+}
 
 export function PaymentForm({
   flats,
@@ -20,6 +25,11 @@ export function PaymentForm({
   presetFlatId?: number;
 }) {
   const [state, action] = useActionState(savePaymentAction, null);
+  const initialDate = (payment?.paymentDate || today).slice(0, 10);
+  const explicitMonth = payment?.forMonth ? monthKey(payment.forMonth) : "";
+  const [paymentDate, setPaymentDate] = useState(initialDate);
+  const [forMonth, setForMonth] = useState(explicitMonth || monthKey(initialDate || month));
+  const [monthTouched, setMonthTouched] = useState(Boolean(explicitMonth && explicitMonth !== monthKey(initialDate)));
   return (
     <form action={action} className="space-y-4">
       {payment ? <input type="hidden" name="id" value={payment.id} /> : null}
@@ -56,17 +66,30 @@ export function PaymentForm({
             name="payment_date"
             type="date"
             required
-            defaultValue={payment?.paymentDate || today}
+            value={paymentDate}
+            onChange={(event) => {
+              const next = event.target.value;
+              setPaymentDate(next);
+              if (!monthTouched && /^\d{4}-\d{2}-\d{2}$/.test(next)) setForMonth(monthKey(next));
+            }}
             className={controlClass}
           />
         </Field>
-        <Field label="Applied to month" htmlFor="for_month" hint="Extra in this month carries forward. A future month stays as advance.">
+        <Field
+          label="Applied to month"
+          htmlFor="for_month"
+          hint="This stays on the payment month. Change it only when the money is for a different month."
+        >
           <input
             id="for_month"
             name="for_month"
             type="month"
             required
-            defaultValue={(payment?.forMonth || month).slice(0, 7)}
+            value={forMonth}
+            onChange={(event) => {
+              setMonthTouched(true);
+              setForMonth(event.target.value);
+            }}
             className={controlClass}
           />
         </Field>

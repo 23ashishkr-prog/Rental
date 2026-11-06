@@ -2,9 +2,9 @@ import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { loadSnapshots } from "@/lib/portfolio";
 import { queryExpenses, queryPayments } from "@/lib/queries";
-import { currentMonthKey, formatDate, formatMonth, isInMonth, parseMonthParam } from "@/lib/dates";
+import { currentMonthKey, formatDate, formatMonth, parseMonthParam } from "@/lib/dates";
 import { formatINR, roundMoney } from "@/lib/money";
-import { displayedRent, monthStanding, pendingLabel, type MonthStanding } from "@/lib/rent";
+import { assignedMonth, displayedRent, monthStanding, paymentInMonth, pendingLabel, type MonthStanding } from "@/lib/rent";
 import { reminderText } from "@/lib/reminders";
 import { whatsAppHref } from "@/lib/upi";
 import { one } from "@/lib/search";
@@ -38,17 +38,16 @@ export default async function HomePage({
   const through = month.slice(0, 7);
   const collected = roundMoney(
     allPayments
-      .filter((payment) => payment.status === "confirmed" && isInMonth(payment.paymentDate, month))
+      .filter((payment) => payment.status === "confirmed" && paymentInMonth({ ...payment, forMonthExplicit: payment.forMonth != null }, month))
       .reduce((sum, payment) => sum + payment.amount, 0),
   );
   const collectedYear = roundMoney(
     allPayments
-      .filter(
-        (payment) =>
-          payment.status === "confirmed" &&
-          payment.paymentDate.startsWith(year) &&
-          payment.paymentDate.slice(0, 7) <= through,
-      )
+      .filter((payment) => {
+        if (payment.status !== "confirmed") return false;
+        const assigned = assignedMonth({ ...payment, forMonthExplicit: payment.forMonth != null });
+        return Boolean(assigned && assigned.startsWith(year) && assigned.slice(0, 7) <= through);
+      })
       .reduce((sum, payment) => sum + payment.amount, 0),
   );
   const standings = snapshots.map((flat) => ({ flat, standing: monthStanding(flat.ledger, month) }));
@@ -59,7 +58,7 @@ export default async function HomePage({
   const expenseTotal = roundMoney(expenses.reduce((sum, expense) => sum + expense.amount, 0));
   const ordered = [...standings].sort((a, b) => statusRank(a.standing) - statusRank(b.standing) || a.flat.unitNumber.localeCompare(b.flat.unitNumber, "en", { numeric: true }));
   const recentPayments = allPayments
-    .filter((payment) => isInMonth(payment.paymentDate, month) || (payment.forMonth ? isInMonth(payment.forMonth, month) : false))
+    .filter((payment) => paymentInMonth({ ...payment, forMonthExplicit: payment.forMonth != null }, month))
     .slice(0, 8);
 
   const groups = new Map<string, number>();

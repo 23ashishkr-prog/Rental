@@ -35,7 +35,11 @@ export async function GET(request: Request) {
       ...flat,
       rentChanges: rentChanges
         .filter((change) => change.flatId === flat.id)
-        .map((change) => ({ effectiveMonth: change.effectiveMonth, monthlyRent: change.monthlyRent })),
+        .map((change) => ({
+          effectiveMonth: change.effectiveMonth,
+          monthlyRent: change.monthlyRent,
+          note: change.note,
+        })),
     })),
     payments,
     adjustments,

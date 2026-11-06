@@ -31,6 +31,9 @@ export function PayPanel({
   const [copied, setCopied] = useState(false);
   const requestId = useRef(0);
   const [state, action] = useActionState(submitTenantPaymentAction, null);
+  const [paidOn, setPaidOn] = useState(today);
+  const [forMonth, setForMonth] = useState(month.slice(0, 7));
+  const [monthTouched, setMonthTouched] = useState(false);
   const numeric = Number(amount);
   const safeAmount = Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
   const note = `Flat ${unitNumber} rent`;
@@ -113,10 +116,33 @@ export function PayPanel({
         </Field>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Paid on" htmlFor="payment_date">
-            <input id="payment_date" name="payment_date" type="date" required defaultValue={today} className={controlClass} />
+            <input
+              id="payment_date"
+              name="payment_date"
+              type="date"
+              required
+              value={paidOn}
+              onChange={(event) => {
+                const next = event.target.value;
+                setPaidOn(next);
+                if (!monthTouched && /^\d{4}-\d{2}-\d{2}$/.test(next)) setForMonth(next.slice(0, 7));
+              }}
+              className={controlClass}
+            />
           </Field>
-          <Field label="For month" htmlFor="for_month" hint="Leave this as the current month unless you are paying a future month ahead.">
-            <input id="for_month" name="for_month" type="month" required defaultValue={month.slice(0, 7)} className={controlClass} />
+          <Field label="For month" htmlFor="for_month" hint="Leave this on the month you paid. Change it only if this payment is for a different month.">
+            <input
+              id="for_month"
+              name="for_month"
+              type="month"
+              required
+              value={forMonth}
+              onChange={(event) => {
+                setMonthTouched(true);
+                setForMonth(event.target.value);
+              }}
+              className={controlClass}
+            />
           </Field>
         </div>
         <FormMessage state={state} />

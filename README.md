@@ -2,7 +2,7 @@
 
 Mobile-first rent book for one building. Admins manage flats, payments, expenses, and adjustments. Tenants see only their own flat, pay by UPI, and submit the reference for confirmation.
 
-The live data already sits in Neon (`flats`, `payments`, `expenses`, `rent_adjustments`, `app_users`). This app does not create that schema and does not delete or rewrite existing rows.
+The live data already sits in Neon (`flats`, `payments`, `expenses`, `rent_adjustments`, `app_users`). This app does not delete or rebuild those tables. On first read it adds `payments.for_month_explicit` if needed, clears month overrides that the edit form had filled in with the current month on imported payments, and corrects `Previous rent` rows the app itself generated. Admin-entered rent amounts are left as stored.
 
 ## Setup
 
@@ -48,7 +48,7 @@ ALTER TABLE public.flats
 
 `LEDGER_START_DATE` (default `2026-04-01`) is the first month rent can be charged. Each flat starts at the later of that month and its `rent_start_date`. Months from `rent_start_date` through the month before it are shown as one line, **Paid (before Apr 2026)**, and are not pending. No payment rows are inserted for that history. Set `LEDGER_START_DATE` in Vercel only if the books should open on a different month.
 
-Rent for a month is the latest `rent_changes` row with `effective_month` on or before that month. If there is no row, the flat's `monthly_rent` is used. Add increases from the flat page. The optional checkbox also stores the latest amount on the flat and keeps the previous amount for earlier months. Run this once:
+Rent for a month is the latest `rent_changes` row with `effective_month` on or before that month. If there is no row, the flat's `monthly_rent` is used. Add increases from the flat page. The optional checkbox also stores the latest amount on the flat and keeps the previous amount for earlier months. The app does not copy that new amount back onto months before the effective month. Run this once:
 
 ```sql
 CREATE TABLE IF NOT EXISTS public.rent_changes (
@@ -103,7 +103,7 @@ Authorization is applied in the server queries, not only in the UI.
 For each flat, full `monthly_rent` is charged from the month of `rent_start_date` through the month you are viewing (dates in Asia/Kolkata). There is no mid-month proration.
 
 - A `rent_adjustments` row adds to that month (negative amount is a discount or waiver).
-- A **confirmed** payment counts toward `payments.for_month`. Older rows with an empty `for_month` count toward the `payment_date` month. A blank status counts as confirmed.
+- A **confirmed** payment counts toward the calendar month of `payment_date`. `payments.for_month` is used only when someone explicitly picked a different month (`for_month_explicit`). Re-saving an imported payment does not assign it to the month open on the screen. A blank status counts as confirmed.
 - Months before `LEDGER_START_DATE` are treated as fully paid. The balance at the first charged month is `opening_balance` (0 unless you set one).
 - The rent charged in a month comes from `rent_changes` when one is in force, otherwise from `flats.monthly_rent`. A payment of the old amount after an increase leaves the difference pending.
 - Pending and rejected payments do not reduce the balance.
