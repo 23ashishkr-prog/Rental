@@ -38,6 +38,37 @@ test("profit ignores months before the books open and excludes personal costs", 
   assert.equal(report.categories.some((category) => category.category === "Personal"), false);
 });
 
+test("a security deposit does not change profit, due, or collected", () => {
+  const shared = {
+    year: 2026,
+    today: "2026-05-10",
+    includePersonal: false,
+    payments: [{ flatId: 1, forMonth: null, paymentDate: "2026-04-02", amount: 10000, status: "confirmed" as const }],
+    adjustments: [],
+    expenses: [{ flatId: 1, category: "Repairs", amount: 500, expenseDate: "2026-04-11", title: "Tap" }],
+  };
+  const flat = {
+    id: 1,
+    unitNumber: "1",
+    tenantName: null,
+    monthlyRent: 10000,
+    rentStartDate: "2026-04-01",
+    active: true,
+  };
+  const withoutDeposit = buildProfitReport({ ...shared, flats: [flat] });
+  const withDeposit = buildProfitReport({
+    ...shared,
+    flats: [{ ...flat, securityDeposit: 750000 }],
+  });
+  assert.equal(withDeposit.totals.due, withoutDeposit.totals.due);
+  assert.equal(withDeposit.totals.collected, withoutDeposit.totals.collected);
+  assert.equal(withDeposit.totals.net, withoutDeposit.totals.net);
+  assert.equal(withDeposit.flats[0].due, 20000);
+  assert.equal(withDeposit.flats[0].collected, 10000);
+  assert.equal(withDeposit.flats[0].net, 9500);
+  assert.equal(withDeposit.totals.due, 20000);
+});
+
 test("profit due uses the rent in force for each month", () => {
   const report = buildProfitReport({
     year: 2026,

@@ -7,6 +7,7 @@ import { one } from "@/lib/search";
 import QRCode from "qrcode";
 import { PayPanel } from "@/components/pay-panel";
 import { displayedRent } from "@/lib/rent";
+import { flatMonthFigures } from "@/lib/dashboard";
 import { buildUpiUrl } from "@/lib/upi";
 import { PageHeader, buttonLinkClass } from "@/components/ui-bits";
 export const dynamic = "force-dynamic";
@@ -46,7 +47,8 @@ export default async function PayPage({
     );
   }
 
-  const defaultAmount = flat.ledger.pending > 0 ? flat.ledger.pending : displayedRent(flat.ledger, month, flat.monthlyRent);
+  const figures = flatMonthFigures(flat.ledger, month);
+  const defaultAmount = flat.ledger.pending > 0 ? flat.ledger.pending : figures.left > 0 ? figures.left : displayedRent(flat.ledger, month, flat.monthlyRent);
   const initialQr =
     defaultAmount > 0
       ? await QRCode.toString(buildUpiUrl(defaultAmount, `Flat ${flat.unitNumber} rent`), {
@@ -71,10 +73,11 @@ export default async function PayPage({
         today={todayIST()}
         month={month}
         pending={flat.ledger.pending}
+        monthLeft={figures.left}
       />
       {actor.isAdmin ? (
-        <Link href={`/payments/new?flat=${flat.id}`} className={`${buttonLinkClass("ghost")} mt-4 w-full`}>
-          Record without the tenant form
+        <Link href={`/payments/new?flat=${flat.id}&month=${month.slice(0, 7)}&amount=${defaultAmount > 0 ? defaultAmount : ""}`} className={`${buttonLinkClass("ghost")} mt-4 w-full`}>
+          Record payment
         </Link>
       ) : null}
     </div>

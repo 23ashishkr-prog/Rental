@@ -17,6 +17,7 @@ export function PayPanel({
   today,
   month,
   pending,
+  monthLeft = 0,
 }: {
   flatId: number;
   unitNumber: string;
@@ -25,6 +26,7 @@ export function PayPanel({
   today: string;
   month: string;
   pending: number;
+  monthLeft?: number;
 }) {
   const [amount, setAmount] = useState(defaultAmount > 0 ? String(defaultAmount) : "");
   const [qr, setQr] = useState(initialQr);
@@ -63,11 +65,22 @@ export function PayPanel({
   return (
     <div className="space-y-5">
       <section className="rounded-3xl bg-card p-4 ring-1 ring-foreground/10">
-        <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Pay {unitNumber}</p>
-        <p className="font-display mt-1 text-4xl font-semibold tracking-tight text-amber-800">
-          {pending > 0 ? formatINR(pending) : "No balance due"}
+        <p className="text-sm font-semibold text-foreground/80">Amount to pay · {unitNumber}</p>
+        <p className={`font-display mt-1 text-5xl font-semibold tracking-tight ${pending > 0 ? "text-rose-700" : "text-emerald-800"}`}>
+          {pending > 0 ? formatINR(pending) : "Nothing unpaid"}
         </p>
-        <Field label="Amount to pay (₹)" htmlFor="amount-preview" hint="Change this for a partial payment or an advance.">
+        {monthLeft > 0 ? <p className="mt-2 text-sm text-foreground/75">Left to collect this month {formatINR(monthLeft)}</p> : null}
+        {monthLeft > 0 && pending > 0 && monthLeft !== pending ? (
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button type="button" className="min-h-11 rounded-full bg-white px-3 text-sm font-medium ring-1 ring-foreground/10" onClick={() => void onAmountChange(String(monthLeft))}>
+              Left this month · {formatINR(monthLeft)}
+            </button>
+            <button type="button" className="min-h-11 rounded-full bg-white px-3 text-sm font-medium ring-1 ring-foreground/10" onClick={() => void onAmountChange(String(pending))}>
+              All unpaid · {formatINR(pending)}
+            </button>
+          </div>
+        ) : null}
+        <Field label="Amount to pay (₹)" htmlFor="amount-preview" hint="Filled in for you. Change it only for a smaller payment.">
           <input
             id="amount-preview"
             inputMode="decimal"
@@ -115,7 +128,7 @@ export function PayPanel({
           <textarea id="notes" name="notes" rows={3} className={`${controlClass} h-auto py-3`} placeholder="Optional note for the owner" />
         </Field>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="Paid on" htmlFor="payment_date">
+          <Field label="Date you paid" htmlFor="payment_date">
             <input
               id="payment_date"
               name="payment_date"
@@ -130,7 +143,7 @@ export function PayPanel({
               className={controlClass}
             />
           </Field>
-          <Field label="For month" htmlFor="for_month" hint="Leave this on the month you paid. Change it only if this payment is for a different month.">
+          <Field label="Which month this is for" htmlFor="for_month" hint="Already set to this month. Change it only if you are paying a different month.">
             <input
               id="for_month"
               name="for_month"

@@ -24,6 +24,11 @@ export type ProfitFlatInput = {
   rentStartDate: string | null;
   active: boolean;
   openingBalance?: number;
+  /**
+   * Ignored. A security deposit is not rent and must not change due, collected, or profit.
+   * The field is here so a flat record can be passed through without affecting the totals.
+   */
+  securityDeposit?: number | null;
   rentChanges?: { effectiveMonth: string; monthlyRent: number; note?: string | null }[];
 };
 

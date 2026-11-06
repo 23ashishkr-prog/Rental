@@ -2,11 +2,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { loadSnapshot } from "@/lib/portfolio";
-import { currentMonthKey, formatDate, formatMonth } from "@/lib/dates";
+import { currentMonthKey, formatDate, formatMonth, parseMonthParam } from "@/lib/dates";
 import { formatINR, roundMoney } from "@/lib/money";
 import { isPersonalCategory } from "@/lib/categories";
 import { expenseFlatColumnExists, queryExpenses } from "@/lib/queries";
-import { displayedRent, effectiveRentChanges, monthStanding, pendingLabel, type SettledBefore } from "@/lib/rent";
+import { flatMonthFigures, recordPaymentHref, suggestedRecordAmount, summarizeDashboard } from "@/lib/dashboard";
+import { displayedRent, effectiveRentChanges, type SettledBefore } from "@/lib/rent";
 import { rentChangesTableIsReady } from "@/lib/db";
 import { reminderText } from "@/lib/reminders";
 import { whatsAppHref } from "@/lib/upi";
@@ -14,7 +15,9 @@ import { notice, one } from "@/lib/search";
 import { AdjustmentForm, RentChangeForm } from "@/components/record-forms";
 import { ConfirmForm } from "@/components/submit-button";
 import { StatusBadge } from "@/components/status-badge";
-import { PageHeader, buttonLinkClass } from "@/components/ui-bits";
+import { MonthSwitcher } from "@/components/month-switcher";
+import { MonthSummary } from "@/components/month-summary";
+import { PageHeader, buttonLinkClass, glassClass } from "@/components/ui-bits";
 import { deleteAdjustmentAction, deleteFlatAction, deletePaymentAction, deleteRentChangeAction } from "@/server/rent-actions";
 import { Button } from "@/components/ui/button";
 
@@ -31,13 +34,17 @@ export default async function FlatDetailPage({
   const { id } = await params;
   const flatId = Number(id);
   if (!Number.isInteger(flatId) || flatId <= 0) notFound();
-  const month = currentMonthKey();
+  const now = currentMonthKey();
+  const query = await searchParams;
+  const focus = parseMonthParam(one(query.month), now);
+  const month = focus > now ? focus : now;
   const snapshot = await loadSnapshot(actor, flatId, month);
   if (!snapshot) notFound();
-  const standing = monthStanding(snapshot.ledger, month);
+  const figures = flatMonthFigures(snapshot.ledger, focus);
+  const summary = summarizeDashboard([{ ledger: snapshot.ledger }], focus);
   const expenses = actor.isAdmin ? await queryExpenses(actor, { flatId, limit: null }) : [];
   const expensesLinked = actor.isAdmin ? await expenseFlatColumnExists() : false;
-  const year = month.slice(0, 4);
+  const year = focus.slice(0, 4);
   const yearExpenses = expenses.filter(
     (expense) => expense.expenseDate.startsWith(year) && !isPersonalCategory(expense.category),
   );
@@ -48,7 +55,6 @@ export default async function FlatDetailPage({
   );
   const yearExpenseTotal = roundMoney(yearExpenses.reduce((sum, expense) => sum + expense.amount, 0));
   const yearProfit = roundMoney(yearCollected - yearExpenseTotal);
-  const query = await searchParams;
   const error = notice(query.error);
   const invited = one(query.invited) === "1";
   const wa =
@@ -74,44 +80,39 @@ export default async function FlatDetailPage({
         action={
           actor.isAdmin ? (
             <Link href={`/flats/${snapshot.id}/edit`} className={buttonLinkClass("secondary")}>
-              Edit
+              Edit flat
             </Link>
           ) : undefined
         }
       />
+      <MonthSwitcher month={focus} path={`/flats/${snapshot.id}`} />
       {error ? <p className="rounded-xl bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p> : null}
       {invited ? <p className="rounded-xl bg-primary/10 px-3 py-2 text-sm text-primary">Tenant invited. They can set a password on first login.</p> : null}
 
-      <section className="rounded-3xl bg-primary px-5 py-5 text-primary-foreground">
-        <p className="text-xs font-semibold tracking-[0.14em] uppercase opacity-80">Pending</p>
-        <p className="font-display text-4xl font-semibold">{formatINR(snapshot.ledger.pending)}</p>
-        <p className="mt-1 text-sm opacity-85">
-          {snapshot.ledger.pending > 0
-            ? pendingLabel(snapshot.ledger.pendingMonths, snapshot.ledger.partial)
-            : snapshot.ledger.credit > 0
-              ? `${formatINR(snapshot.ledger.credit)} credit`
-              : "Nothing pending"}
+      <MonthSummary summary={summary} month={focus} />
+      {snapshot.awaiting > 0 ? (
+        <p className="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-950 ring-1 ring-amber-200">
+          Waiting for confirmation: {formatINR(snapshot.awaiting)}. That money is not counted as paid yet.
         </p>
-        <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
-          <p>Rent {formatINR(displayedRent(snapshot.ledger, month, snapshot.monthlyRent))}</p>
-          <p>Paid {formatINR(snapshot.ledger.totalPaid)}</p>
-          {snapshot.ledger.advancePaid > 0 ? <p>Advance {formatINR(snapshot.ledger.advancePaid)}</p> : null}
-          {snapshot.awaiting > 0 ? <p>Unconfirmed {formatINR(snapshot.awaiting)}</p> : null}
-        </div>
-      </section>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <Link href={`/pay?flat=${snapshot.id}`} className={buttonLinkClass()}>
-          Pay / show UPI
+          Pay rent
         </Link>
         {actor.isAdmin ? (
-          <Link href={`/payments/new?flat=${snapshot.id}`} className={buttonLinkClass("secondary")}>
+          <Link href={recordPaymentHref(snapshot.id, focus, suggestedRecordAmount(figures))} className={buttonLinkClass("secondary")}>
             Record payment
           </Link>
         ) : null}
+        {actor.isAdmin ? (
+          <a href="#rent-increase" className={buttonLinkClass("ghost")}>
+            Change rent
+          </a>
+        ) : null}
         {wa ? (
           <a href={wa} target="_blank" rel="noreferrer" className={buttonLinkClass("ghost")}>
-            WhatsApp reminder
+            Send reminder
           </a>
         ) : null}
       </div>
@@ -119,42 +120,39 @@ export default async function FlatDetailPage({
         {snapshot.tenantEmail || "No email"} · {snapshot.tenantPhone || "No phone"}
         {snapshot.rentStartDate ? ` · Rent from ${formatDate(snapshot.rentStartDate)}` : " · Rent start date not set"}
       </p>
-
-      <section className="grid grid-cols-2 gap-3">
-        <div className="rounded-2xl bg-card p-4 ring-1 ring-foreground/10">
-          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">This month</p>
-          <p className={`font-display mt-1 text-2xl font-semibold ${standing.status === "paid" ? "text-teal-800" : standing.status === "none" ? "" : "text-amber-800"}`}>
-            {standing.status === "paid"
-              ? "Paid"
-              : standing.status === "partial"
-                ? `Partial ${formatINR(standing.remaining)}`
-                : standing.status === "due"
-                  ? `Due ${formatINR(standing.remaining)}`
-                  : "No charge"}
+      {actor.isAdmin ? (
+        <section className={`${glassClass} px-4 py-4`}>
+          <p className="text-sm font-semibold">Security deposit</p>
+          <p className="font-display mt-1 text-3xl font-semibold">
+            {snapshot.securityDeposit == null ? "Not entered" : formatINR(snapshot.securityDeposit)}
           </p>
-        </div>
-        <div className="rounded-2xl bg-card p-4 ring-1 ring-foreground/10">
-          <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Earlier arrears</p>
-          <p className="font-display mt-1 text-2xl font-semibold">{formatINR(standing.arrears)}</p>
-        </div>
-      </section>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Money this tenant has already given you to hold. It is not rent, and it is not added to what they owe.
+          </p>
+          <Link href={`/flats/${snapshot.id}/edit`} className="mt-3 inline-flex text-sm font-medium text-primary">
+            Edit deposit
+          </Link>
+        </section>
+      ) : null}
 
       <RentHistory
         actorIsAdmin={actor.isAdmin}
         flatId={snapshot.id}
-        month={month}
+        month={focus}
+        currentRent={displayedRent(snapshot.ledger, focus, snapshot.monthlyRent)}
         changes={snapshot.rentChanges}
         editingId={one(query.change)}
         tableReady={rentChangesTableIsReady()}
       />
 
       <section>
-        <h2 className="mb-3 font-display text-xl font-semibold">Ledger</h2>
+        <h2 className="mb-1 font-display text-xl font-semibold">Each month</h2>
+        <p className="mb-3 text-sm text-muted-foreground">What was due, what was paid, and what was still unpaid.</p>
         {snapshot.ledger.settledBefore || snapshot.ledger.months.length > 0 ? (
           <div className="space-y-2 md:hidden">
             {snapshot.ledger.settledBefore ? <SettledCard settled={snapshot.ledger.settledBefore} /> : null}
             {snapshot.ledger.months.map((row) => (
-              <article key={row.month} className="rounded-2xl bg-card p-4 ring-1 ring-foreground/10">
+              <article key={row.month} className={`rounded-2xl p-4 ring-1 ring-foreground/10 ${rowTone(row)}`}>
                 <p className="font-semibold">{formatMonth(row.month)}</p>
                 <dl className="mt-2 grid grid-cols-2 gap-2 text-sm">
                   <div>
@@ -166,7 +164,7 @@ export default async function FlatDetailPage({
                     <dd>{formatINR(row.paid)}</dd>
                   </div>
                   <div>
-                    <dt className="text-muted-foreground">Carried in</dt>
+                    <dt className="text-muted-foreground">Earlier</dt>
                     <dd>{formatINR(row.opening)}</dd>
                   </div>
                   <div>
@@ -187,7 +185,7 @@ export default async function FlatDetailPage({
                 <th className="px-3 py-3 font-medium">Month</th>
                 <th className="px-3 py-3 font-medium">Due</th>
                 <th className="px-3 py-3 font-medium">Paid</th>
-                <th className="px-3 py-3 font-medium">Carried</th>
+                <th className="px-3 py-3 font-medium">Earlier</th>
                 <th className="px-3 py-3 font-medium">Balance</th>
               </tr>
             </thead>
@@ -209,12 +207,12 @@ export default async function FlatDetailPage({
                 </tr>
               ) : null}
               {snapshot.ledger.months.map((row) => (
-                <tr key={row.month} className="border-t border-foreground/10">
+                <tr key={row.month} className={`border-t border-foreground/10 ${rowTone(row)}`}>
                   <td className="px-3 py-3">
                     {formatMonth(row.month)}
                     {row.adjustment !== 0 ? (
                       <span className="mt-0.5 block text-xs text-muted-foreground">
-                        Adjustment {formatINR(row.adjustment)}
+                        Extra {formatINR(row.adjustment)}
                       </span>
                     ) : null}
                   </td>
@@ -234,7 +232,7 @@ export default async function FlatDetailPage({
           <h2 className="mb-3 font-display text-xl font-semibold">This flat&apos;s profit, {year}</h2>
           <div className="grid grid-cols-3 gap-2">
             <div className="rounded-2xl bg-card p-3 ring-1 ring-foreground/10">
-              <p className="text-[0.7rem] font-semibold tracking-wide text-muted-foreground uppercase">Collected</p>
+              <p className="text-[0.7rem] font-semibold tracking-wide text-muted-foreground uppercase">Paid</p>
               <p className="font-display mt-1 text-lg font-semibold">{formatINR(yearCollected)}</p>
             </div>
             <div className="rounded-2xl bg-card p-3 ring-1 ring-foreground/10">
@@ -242,7 +240,7 @@ export default async function FlatDetailPage({
               <p className="font-display mt-1 text-lg font-semibold">{formatINR(yearExpenseTotal)}</p>
             </div>
             <div className="rounded-2xl bg-card p-3 ring-1 ring-foreground/10">
-              <p className="text-[0.7rem] font-semibold tracking-wide text-muted-foreground uppercase">Net</p>
+              <p className="text-[0.7rem] font-semibold tracking-wide text-muted-foreground uppercase">After expenses</p>
               <p className={`font-display mt-1 text-lg font-semibold ${yearProfit >= 0 ? "text-teal-800" : "text-amber-800"}`}>
                 {formatINR(yearProfit)}
               </p>
@@ -317,7 +315,7 @@ export default async function FlatDetailPage({
 
       {actor.isAdmin ? (
         <section className="space-y-4">
-          <h2 className="font-display text-xl font-semibold">Rent adjustments</h2>
+          <h2 className="font-display text-xl font-semibold">Extra charge or discount</h2>
           {snapshot.adjustments.length > 0 ? (
             <ul className="space-y-2">
               {snapshot.adjustments.map((adjustment) => (
@@ -340,7 +338,7 @@ export default async function FlatDetailPage({
           ) : (
             <p className="text-sm text-muted-foreground">No adjustments yet.</p>
           )}
-          <AdjustmentForm flatId={snapshot.id} month={month} />
+          <AdjustmentForm flatId={snapshot.id} month={focus} />
           <ConfirmForm action={deleteFlatAction} message="Delete this flat? This only works when it has no history.">
             <input type="hidden" name="id" value={snapshot.id} />
             <Button type="submit" variant="destructive" className="h-12 w-full text-base">
@@ -357,6 +355,7 @@ function RentHistory({
   actorIsAdmin,
   flatId,
   month,
+  currentRent,
   changes,
   editingId,
   tableReady,
@@ -364,6 +363,7 @@ function RentHistory({
   actorIsAdmin: boolean;
   flatId: number;
   month: string;
+  currentRent: number;
   changes: { id: number; effectiveMonth: string; monthlyRent: number; note: string | null }[];
   editingId?: string;
   tableReady: boolean;
@@ -373,7 +373,7 @@ function RentHistory({
   const timeline = [...visible].sort((a, b) => b.effectiveMonth.localeCompare(a.effectiveMonth) || b.id - a.id);
   return (
     <section className="space-y-3">
-      <h2 className="font-display text-xl font-semibold">Rent history</h2>
+      <h2 className="font-display text-xl font-semibold">Rent changes</h2>
       {timeline.length === 0 ? (
         <p className="text-sm text-muted-foreground">No increases yet. Each month uses the rent stored on the flat.</p>
       ) : (
@@ -389,7 +389,7 @@ function RentHistory({
               </div>
               {actorIsAdmin ? (
                 <div className="mt-3 flex gap-4">
-                  <Link href={`/flats/${flatId}?change=${change.id}#rent-increase`} className="text-sm font-medium text-primary">
+                  <Link href={`/flats/${flatId}?month=${month.slice(0, 7)}&change=${change.id}#rent-increase`} className="text-sm font-medium text-primary">
                     Edit
                   </Link>
                   <ConfirmForm action={deleteRentChangeAction} message="Delete this rent increase?">
@@ -408,8 +408,8 @@ function RentHistory({
       {actorIsAdmin ? (
         tableReady || changes.length > 0 ? (
           <div className="rounded-2xl bg-card p-4 ring-1 ring-foreground/10">
-            <h3 className="mb-3 font-semibold">{editing ? "Edit rent increase" : "Rent increase"}</h3>
-            <RentChangeForm flatId={flatId} change={editing} defaultMonth={month} />
+            <h3 className="mb-3 font-semibold">{editing ? "Edit this rent change" : "Change the rent"}</h3>
+            <RentChangeForm flatId={flatId} change={editing} defaultMonth={month} currentRent={currentRent} />
             {editing ? (
               <p className="mt-3 text-sm">
                 <Link href={`/flats/${flatId}#rent-increase`} className="font-medium text-primary">
@@ -436,6 +436,13 @@ function RentHistory({
       ) : null}
     </section>
   );
+}
+
+function rowTone(row: { charge: number; paid: number }): string {
+  if (row.charge <= 0) return "bg-card";
+  if (row.paid >= row.charge) return "bg-emerald-50/80";
+  if (row.paid > 0) return "bg-amber-50/90";
+  return "bg-rose-50/80";
 }
 
 function SettledCard({ settled }: { settled: SettledBefore }) {

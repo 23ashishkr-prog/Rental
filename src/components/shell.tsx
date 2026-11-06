@@ -33,7 +33,10 @@ export function Shell({
     <div className="min-h-dvh md:grid md:grid-cols-[232px_minmax(0,1fr)]">
       <AppNav items={items} />
       <div className="min-w-0">
-        <header className="sticky top-0 z-30 border-b border-foreground/10 bg-background/90 backdrop-blur">
+        <header
+          className="sticky top-0 z-30 border-b border-white/60 bg-background/75 backdrop-blur-xl"
+          style={{ paddingTop: "env(safe-area-inset-top)" }}
+        >
           <div className="mx-auto flex h-14 max-w-5xl items-center justify-between gap-3 px-4 md:px-8">
             <Link href="/" className="flex items-center gap-2 md:hidden">
               <span className="grid size-8 place-items-center rounded-lg bg-primary text-sm text-primary-foreground">
@@ -47,7 +50,9 @@ export function Shell({
             <p className="truncate text-sm text-muted-foreground md:hidden">{who}</p>
           </div>
         </header>
-        <main className="mx-auto w-full max-w-5xl px-4 pt-4 pb-28 md:px-8 md:pt-6 md:pb-12">{children}</main>
+        <main className="mx-auto w-full max-w-5xl px-4 pt-4 pb-[calc(7.5rem+env(safe-area-inset-bottom))] md:px-8 md:pt-6 md:pb-12">
+          {children}
+        </main>
       </div>
     </div>
   );

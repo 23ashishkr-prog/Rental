@@ -29,6 +29,8 @@ export type FlatRecord = {
   tenantPhone: string | null;
   active: boolean;
   openingBalance: number;
+  /** Money the tenant has already given to hold. Not rent. Null until an admin enters it. */
+  securityDeposit: number | null;
   createdAt: string;
 };
 

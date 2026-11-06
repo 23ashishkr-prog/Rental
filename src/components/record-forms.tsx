@@ -80,17 +80,19 @@ export function RentChangeForm({
   flatId,
   change,
   defaultMonth,
+  currentRent,
 }: {
   flatId: number;
   change?: { id: number; effectiveMonth: string; monthlyRent: number; note: string | null };
   defaultMonth: string;
+  currentRent?: number;
 }) {
   const [state, action] = useActionState(saveRentChangeAction, null);
   return (
     <form action={action} id="rent-increase" className="space-y-4">
       <input type="hidden" name="flat_id" value={flatId} />
       {change ? <input type="hidden" name="id" value={change.id} /> : null}
-      <Field label="Effective month" htmlFor="effective_month" hint="This rent is due from this month until the next increase.">
+      <Field label="From which month" htmlFor="effective_month" hint="This rent is due from this month until the next change.">
         <input
           id="effective_month"
           name="effective_month"
@@ -100,25 +102,25 @@ export function RentChangeForm({
           className={controlClass}
         />
       </Field>
-      <Field label="Monthly rent (₹)" htmlFor="rent_change_amount">
+      <Field label="New monthly rent (₹)" htmlFor="rent_change_amount" hint="Starts from the rent they pay now. Change the number, then save.">
         <input
           id="rent_change_amount"
           name="amount"
           inputMode="decimal"
           required
-          defaultValue={change ? String(change.monthlyRent) : ""}
+          defaultValue={change ? String(change.monthlyRent) : currentRent != null ? String(currentRent) : ""}
           className={controlClass}
         />
       </Field>
       <Field label="Note" htmlFor="rent_note">
-        <input id="rent_note" name="note" defaultValue={change?.note ?? ""} className={controlClass} placeholder="Renewal, market revision…" />
+        <input id="rent_note" name="note" defaultValue={change?.note ?? ""} className={controlClass} placeholder="Optional" />
       </Field>
       <label className="flex min-h-12 items-start gap-3 text-sm font-medium">
-        <input type="checkbox" name="update_current" value="on" className="mt-1 size-5 accent-primary" />
-        <span>Also save this amount as the flat&apos;s current rent. Months before the effective month keep the previous rent.</span>
+        <input type="checkbox" name="update_current" value="on" defaultChecked={!change} className="mt-1 size-5 accent-primary" />
+        <span>Use this as the rent from the month above. Earlier months stay on the old rent.</span>
       </label>
       <FormMessage state={state} />
-      <SubmitButton>{change ? "Save rent change" : "Add rent increase"}</SubmitButton>
+      <SubmitButton>{change ? "Save rent change" : "Save new rent"}</SubmitButton>
     </form>
   );
 }

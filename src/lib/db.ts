@@ -26,6 +26,17 @@ export function asNumber(value: unknown): number {
   return 0;
 }
 
+/** Blank and missing values stay empty. Zero is kept, so an entered deposit of 0 is not "not set". */
+export function asOptionalNumber(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
 export function asDate(value: unknown): string | null {
   return calendarDate(value);
 }

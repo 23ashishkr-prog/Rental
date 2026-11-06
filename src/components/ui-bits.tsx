@@ -1,6 +1,9 @@
 import type { FormState } from "@/lib/action-error";
 import { cn } from "cn";
 
+export const glassClass =
+  "rounded-[1.75rem] border border-white/80 bg-white/55 shadow-[0_18px_40px_-28px_rgba(92,58,24,0.55)] backdrop-blur-xl";
+
 export const controlClass =
   "h-12 w-full rounded-xl border border-input bg-card px-3 text-base text-foreground outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40";
 
