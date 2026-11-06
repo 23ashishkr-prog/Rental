@@ -168,7 +168,12 @@ export function buildProfitReport(input: {
       rentChanges: flat.rentChanges,
       asOfMonth: asOf,
       adjustments: input.adjustments.filter((item) => item.flatId === flat.id),
-      payments: input.payments.filter((item) => item.flatId === flat.id),
+      payments: input.payments
+        .filter((item) => item.flatId === flat.id)
+        .map((item) => ({
+          ...item,
+          forMonthExplicit: item.forMonth != null,
+        })),
     });
     let flatDue = 0;
     let flatCollected = 0;

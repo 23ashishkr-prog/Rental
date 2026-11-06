@@ -52,7 +52,7 @@ export function FlatForm({ flat }: { flat?: FlatRecord }) {
           className={controlClass}
         />
       </Field>
-      <Field label="Rent start date" htmlFor="rent_start_date" hint="Rent is charged from this month, or from the books-open month if this date is earlier. Months before the books open are shown as already paid.">
+      <Field label="Rent start date" htmlFor="rent_start_date" hint="The ledger includes this month, and any earlier month that has a payment or rent change after the books open. Months before the books open stay one paid line.">
         <input
           id="rent_start_date"
           name="rent_start_date"

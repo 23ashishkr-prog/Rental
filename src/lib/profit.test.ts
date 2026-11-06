@@ -61,6 +61,32 @@ test("profit due uses the rent in force for each month", () => {
   assert.equal(report.flats[0].due, 25000);
 });
 
+test("profit counts payment months before the rent start the same way the ledger does", () => {
+  const report = buildProfitReport({
+    year: 2026,
+    today: "2026-11-06",
+    includePersonal: false,
+    flats: [
+      {
+        id: 12,
+        unitNumber: "102",
+        tenantName: null,
+        monthlyRent: 11500,
+        rentStartDate: "2026-07-05",
+        active: true,
+      },
+    ],
+    payments: [
+      { flatId: 12, forMonth: null, paymentDate: "2026-04-18", amount: 9100, status: "confirmed" },
+      { flatId: 12, forMonth: null, paymentDate: "2026-07-02", amount: 11500, status: "confirmed" },
+    ],
+    adjustments: [],
+    expenses: [],
+  });
+  assert.equal(report.flats[0].due, 11500 * 8);
+  assert.equal(report.flats[0].collected, 20600);
+});
+
 test("a flat under 80% collected is flagged", () => {
   const report = buildProfitReport({
     year: 2026,
