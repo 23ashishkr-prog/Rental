@@ -38,6 +38,7 @@ export async function loadSnapshots(
       rentChanges: flatChanges.map((change) => ({
         effectiveMonth: change.effectiveMonth,
         monthlyRent: change.monthlyRent,
+        note: change.note,
       })),
       asOfMonth,
       adjustments: flatAdjustments.map((adjustment) => ({
@@ -46,9 +47,13 @@ export async function loadSnapshots(
       })),
       payments: flatPayments.map((payment) => ({
         forMonth: payment.forMonth,
+        forMonthExplicit: payment.forMonth != null,
         paymentDate: payment.paymentDate,
         amount: payment.amount,
         status: payment.status,
+        method: payment.method,
+        upiRef: payment.upiRef,
+        createdAt: payment.createdAt,
       })),
     });
     const lastPayment =

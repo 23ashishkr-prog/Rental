@@ -1,6 +1,7 @@
 import "server-only";
 import { ConfigError } from "./errors";
 import { gmailLocalPart, isAdminEmail } from "./email";
+import { isImplicitForMonthStamp, PREVIOUS_RENT_NOTE, rentChangeAmountRepairs } from "./rent";
 import {
   asDate,
   asNumber,
@@ -39,6 +40,96 @@ function likePattern(value: string): string {
   return `%${value.trim().replace(/[\\%_]/g, "\\$&")}%`;
 }
 
+let forMonthExplicitReady = false;
+let ledgerRepair: Promise<void> | null = null;
+
+export function forMonthExplicitColumnIsReady(): boolean {
+  return forMonthExplicitReady;
+}
+
+/** One additive column, then correct implicit month stamps and code-written rent rows. No deletes. */
+export function ensureLedgerRepaired(): Promise<void> {
+  if (!ledgerRepair) {
+    ledgerRepair = runLedgerRepair().catch((error) => {
+      ledgerRepair = null;
+      throw error;
+    });
+  }
+  return ledgerRepair;
+}
+
+async function runLedgerRepair(): Promise<void> {
+  try {
+    await sql().query(
+      `ALTER TABLE payments ADD COLUMN IF NOT EXISTS for_month_explicit boolean NOT NULL DEFAULT false`,
+    );
+    forMonthExplicitReady = true;
+    await sql().query(
+      `UPDATE payments
+       SET for_month_explicit = true
+       WHERE for_month IS NOT NULL
+         AND for_month_explicit = false
+         AND NOT (
+           coalesce(method, '') = 'UPI'
+           AND upi_ref IS NULL
+           AND created_at < TIMESTAMP '2026-11-05 00:00:00+00'
+           AND date_trunc('month', for_month) = DATE '2026-11-01'
+           AND date_trunc('month', payment_date) <> DATE '2026-11-01'
+         )`,
+    );
+    await sql().query(
+      `UPDATE payments
+       SET for_month = NULL,
+           method = CASE WHEN method = 'UPI' AND upi_ref IS NULL THEN NULL ELSE method END
+       WHERE for_month_explicit = false
+         AND for_month IS NOT NULL
+         AND coalesce(method, '') = 'UPI'
+         AND upi_ref IS NULL
+         AND created_at < TIMESTAMP '2026-11-05 00:00:00+00'
+         AND date_trunc('month', for_month) = DATE '2026-11-01'
+         AND date_trunc('month', payment_date) <> DATE '2026-11-01'`,
+    );
+  } catch {
+    forMonthExplicitReady = false;
+  }
+  try {
+    await repairStoredRentChanges();
+  } catch {
+    // Reading still ignores a generated row that copied the new rent backward.
+  }
+}
+
+async function repairStoredRentChanges(): Promise<void> {
+  const rows = await sql().query(
+    `SELECT id, flat_id, effective_month, monthly_rent, note FROM rent_changes`,
+  );
+  markRentChangesReady();
+  const changes = (rows as Row[]).map((row) => ({
+    id: Number(row.id),
+    flatId: Number(row.flat_id),
+    effectiveMonth: asDate(row.effective_month) ?? "",
+    monthlyRent: asNumber(row.monthly_rent),
+    note: asText(row.note),
+  }));
+  const byFlat = new Map<number, typeof changes>();
+  for (const change of changes) {
+    if (!change.effectiveMonth) continue;
+    const list = byFlat.get(change.flatId) ?? [];
+    list.push(change);
+    byFlat.set(change.flatId, list);
+  }
+  for (const list of byFlat.values()) {
+    for (const update of rentChangeAmountRepairs(list)) {
+      await sql().query(
+        `UPDATE rent_changes
+         SET monthly_rent = $1
+         WHERE id = $2 AND note = $3 AND monthly_rent <> $1`,
+        [update.monthlyRent, update.id, PREVIOUS_RENT_NOTE],
+      );
+    }
+  }
+}
+
 function mapUser(row: Row): DbUser {
   const email = String(row.email ?? "");
   const isAdmin = row.role === "admin" || isAdminEmail(email);
@@ -73,20 +164,45 @@ function mapStatus(value: unknown): PaymentStatus {
   return "confirmed";
 }
 
+function explicitForMonth(value: unknown): boolean {
+  return value === true || value === "t" || value === "true";
+}
+
 function mapPayment(row: Row): PaymentRecord {
+  const createdAt = String(row.created_at ?? "");
+  const method = asText(row.method);
+  const upiRef = asText(row.upi_ref);
+  const paymentDate = asDate(row.payment_date) ?? "";
+  const storedForMonth = asDate(row.for_month);
+  const columnPresent = "for_month_explicit" in row;
+  let forMonth: string | null = null;
+  if (columnPresent) {
+    forMonth = explicitForMonth(row.for_month_explicit) ? storedForMonth : null;
+  } else if (
+    storedForMonth &&
+    !isImplicitForMonthStamp({
+      forMonth: storedForMonth,
+      paymentDate,
+      method,
+      upiRef,
+      createdAt,
+    })
+  ) {
+    forMonth = storedForMonth;
+  }
   return {
     id: Number(row.id),
     flatId: Number(row.flat_id),
     unitNumber: String(row.unit_number ?? ""),
     tenantName: asText(row.tenant_name),
-    paymentDate: asDate(row.payment_date) ?? "",
+    paymentDate,
     amount: asNumber(row.amount),
     notes: asText(row.notes),
-    forMonth: asDate(row.for_month),
-    method: asText(row.method),
-    upiRef: asText(row.upi_ref),
+    forMonth,
+    method,
+    upiRef,
     status: mapStatus(row.status),
-    createdAt: String(row.created_at ?? ""),
+    createdAt,
   };
 }
 
@@ -234,6 +350,7 @@ export async function queryPayments(
     limit?: number | null;
   } = {},
 ): Promise<PaymentRecord[]> {
+  await ensureLedgerRepaired();
   const params: unknown[] = [];
   const where: string[] = [];
 
@@ -263,7 +380,9 @@ export async function queryPayments(
   if (opts.month) {
     params.push(opts.month.slice(0, 7));
     where.push(
-      `(to_char(p.payment_date, 'YYYY-MM') = $${params.length} OR to_char(p.for_month, 'YYYY-MM') = $${params.length})`,
+      forMonthExplicitReady
+        ? `(CASE WHEN p.for_month_explicit AND p.for_month IS NOT NULL THEN to_char(p.for_month, 'YYYY-MM') ELSE to_char(p.payment_date, 'YYYY-MM') END) = $${params.length}`
+        : `(to_char(p.payment_date, 'YYYY-MM') = $${params.length} OR to_char(p.for_month, 'YYYY-MM') = $${params.length})`,
     );
   }
   if (opts.q?.trim()) {
@@ -276,8 +395,9 @@ export async function queryPayments(
 
   const limited = opts.limit !== null;
   if (limited) params.push(opts.limit ?? 400);
+  const explicit = forMonthExplicitReady ? ", p.for_month_explicit" : "";
   const rows = await sql().query(
-    `SELECT p.id, p.flat_id, p.payment_date, p.amount, p.notes, p.for_month, p.method, p.upi_ref, p.status, p.created_at,
+    `SELECT p.id, p.flat_id, p.payment_date, p.amount, p.notes, p.for_month, p.method, p.upi_ref, p.status, p.created_at${explicit},
             f.unit_number, f.tenant_name
      FROM payments p
      JOIN flats f ON f.id = p.flat_id
@@ -381,6 +501,7 @@ export async function expenseFlatColumnExists(): Promise<boolean> {
 export async function queryRentChanges(actor: Actor, flatIds: number[]): Promise<RentChangeRecord[]> {
   const ids = actor.isAdmin ? flatIds : flatIds.filter((id) => actor.flatIds.includes(id));
   if (ids.length === 0) return [];
+  await ensureLedgerRepaired();
   try {
     const rows = await sql().query(
       `SELECT id, flat_id, effective_month, monthly_rent, note, created_at

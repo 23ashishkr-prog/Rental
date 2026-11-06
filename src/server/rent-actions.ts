@@ -79,11 +79,14 @@ function paymentFromForm(formData: FormData, fallbackStatus: PaymentInput["statu
   const statusRaw = readString(formData, "status");
   const status = STATUSES.has(statusRaw) ? (statusRaw as PaymentInput["status"]) : fallbackStatus;
   const method = clip(readString(formData, "method"), 40);
+  const paymentDate = readDate(formData, "payment_date", "payment date");
+  const chosenMonth = readString(formData, "for_month");
+  const forMonth = chosenMonth ? readMonthField(formData, "for_month") : null;
   return {
     flatId: readId(formData, "flat_id"),
     amount: readAmount(formData),
-    paymentDate: readDate(formData, "payment_date", "payment date"),
-    forMonth: readMonthField(formData, "for_month"),
+    paymentDate,
+    forMonth: forMonth && forMonth.slice(0, 7) !== paymentDate.slice(0, 7) ? forMonth : null,
     method: method || null,
     upiRef: emptyToNull(clip(readString(formData, "upi_ref"), 80)),
     notes: emptyToNull(clip(readString(formData, "notes"), 2000)),

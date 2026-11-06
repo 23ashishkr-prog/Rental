@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { baselineRentChange, buildLedger, monthStanding, pendingLabel, rentForMonth } from "./rent";
+import {
+  baselineRentChange,
+  buildLedger,
+  isImplicitForMonthStamp,
+  monthStanding,
+  pendingLabel,
+  rentChangeAmountRepairs,
+  rentForMonth,
+} from "./rent";
 
 const rent = 10000;
 
@@ -327,6 +335,102 @@ test("keeping the latest rent on the flat does not rewrite earlier months", () =
       ],
     }),
     null,
+  );
+});
+
+test("imported april and may payments are not pulled into the current month", () => {
+  const changes = [
+    { id: 1, effectiveMonth: "2026-07-01", monthlyRent: 4000, note: "increase" },
+    { id: 2, effectiveMonth: "2026-11-01", monthlyRent: 21000, note: "Previous rent" },
+    { id: 3, effectiveMonth: "2025-07-01", monthlyRent: 4000, note: "Previous rent" },
+  ];
+  assert.deepEqual(rentChangeAmountRepairs(changes), [{ id: 3, monthlyRent: 21000 }]);
+  const payments = [
+    ["2026-04-04", "2026-04-07T07:38:50.560Z"],
+    ["2026-05-03", "2026-05-03T02:38:13.098Z"],
+  ].map(([paymentDate, createdAt]) => ({
+    forMonth: "2026-11-01",
+    paymentDate,
+    amount: 21000,
+    status: "confirmed" as const,
+    method: "UPI",
+    upiRef: null,
+    createdAt,
+  }));
+  assert.equal(isImplicitForMonthStamp(payments[0]), true);
+  assert.equal(isImplicitForMonthStamp(payments[1]), true);
+  assert.equal(
+    isImplicitForMonthStamp({
+      forMonth: "2026-12-01",
+      paymentDate: "2026-11-06",
+      method: "UPI",
+      upiRef: null,
+      createdAt: "2026-11-06T04:00:00.000Z",
+    }),
+    false,
+  );
+  const ledger = buildLedger({
+    monthlyRent: 21000,
+    rentStartDate: "2025-07-01",
+    asOfMonth: "2026-11-01",
+    rentChanges: changes,
+    payments: [
+      ...payments,
+      { forMonth: null, paymentDate: "2026-06-04", amount: 21000, status: "confirmed" },
+      { forMonth: null, paymentDate: "2026-07-05", amount: 22000, status: "confirmed" },
+      { forMonth: null, paymentDate: "2026-08-04", amount: 25000, status: "confirmed" },
+      { forMonth: null, paymentDate: "2026-09-07", amount: 25000, status: "confirmed" },
+      { forMonth: null, paymentDate: "2026-10-03", amount: 25000, status: "confirmed" },
+      { forMonth: null, paymentDate: "2026-11-04", amount: 25000, status: "confirmed" },
+    ],
+  });
+  const row = (month: string) => ledger.months.find((item) => item.month === month);
+  assert.equal(ledger.settledBefore?.monthCount, 9);
+  assert.equal(ledger.settledBefore?.amount, 189000);
+  assert.equal(row("2026-04-01")?.rent, 21000);
+  assert.equal(row("2026-04-01")?.paid, 21000);
+  assert.equal(row("2026-05-01")?.rent, 21000);
+  assert.equal(row("2026-05-01")?.paid, 21000);
+  assert.equal(row("2026-06-01")?.paid, 21000);
+  assert.equal(row("2026-10-01")?.rent, 4000);
+  assert.equal(row("2026-10-01")?.paid, 25000);
+  assert.equal(row("2026-11-01")?.rent, 4000);
+  assert.equal(row("2026-11-01")?.paid, 25000);
+});
+
+test("an explicit month chosen after the import still overrides the payment date", () => {
+  const ledger = buildLedger({
+    monthlyRent: 21000,
+    rentStartDate: "2026-04-01",
+    asOfMonth: "2026-11-01",
+    payments: [
+      {
+        forMonth: "2026-11-01",
+        forMonthExplicit: true,
+        paymentDate: "2026-04-04",
+        amount: 21000,
+        status: "confirmed",
+        method: "UPI",
+        upiRef: null,
+        createdAt: "2026-04-07T07:38:50.560Z",
+      },
+    ],
+  });
+  assert.equal(ledger.months.find((month) => month.month === "2026-04-01")?.paid, 0);
+  assert.equal(ledger.months.find((month) => month.month === "2026-11-01")?.paid, 21000);
+});
+
+test("replacing the flat rent does not copy that new amount onto the months before it", () => {
+  assert.deepEqual(
+    baselineRentChange({
+      rentStartDate: "2025-07-01",
+      storedRent: 4000,
+      changes: [
+        { effectiveMonth: "2026-07-01", monthlyRent: 4000, note: "increase" },
+        { effectiveMonth: "2026-11-01", monthlyRent: 21000, note: "Previous rent" },
+      ],
+    }),
+    { effectiveMonth: "2025-07-01", monthlyRent: 21000 },
   );
 });
 

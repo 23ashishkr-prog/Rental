@@ -14,7 +14,7 @@ import {
   sql,
 } from "./db";
 import { hashPassword } from "./passwords";
-import { baselineRentChange } from "./rent";
+import { baselineRentChange, effectiveRentChanges, PREVIOUS_RENT_NOTE, rentChangeAmountRepairs } from "./rent";
 import type { Actor } from "./types";
 import { ownsFlat } from "./types";
 
@@ -33,7 +33,7 @@ export type PaymentInput = {
   flatId: number;
   amount: number;
   paymentDate: string;
-  forMonth: string;
+  forMonth: string | null;
   method: string | null;
   upiRef: string | null;
   notes: string | null;
@@ -210,27 +210,40 @@ async function applyLatestRent(flatId: number): Promise<void> {
   const storedRent = asNumber(flat.monthly_rent);
   const rentStartDate = asDate(flat.rent_start_date);
   const changeRows = await sql().query(
-    `SELECT effective_month, monthly_rent FROM rent_changes WHERE flat_id = $1 ORDER BY effective_month ASC, id ASC`,
+    `SELECT id, effective_month, monthly_rent, note FROM rent_changes WHERE flat_id = $1 ORDER BY effective_month ASC, id ASC`,
     [flatId],
   );
-  const changes = (changeRows as { effective_month?: unknown; monthly_rent?: unknown }[])
+  const loaded = (changeRows as { id?: unknown; effective_month?: unknown; monthly_rent?: unknown; note?: unknown }[])
     .map((row) => ({
+      id: Number(row.id),
       effectiveMonth: asDate(row.effective_month) ?? "",
       monthlyRent: asNumber(row.monthly_rent),
+      note: row.note == null ? null : String(row.note),
     }))
-    .filter((change) => change.effectiveMonth);
+    .filter((change) => change.effectiveMonth && Number.isInteger(change.id));
+  const repairs = rentChangeAmountRepairs(loaded);
+  for (const update of repairs) {
+    await sql().query(
+      `UPDATE rent_changes SET monthly_rent = $1 WHERE id = $2 AND flat_id = $3 AND note = $4 AND monthly_rent <> $1`,
+      [update.monthlyRent, update.id, flatId, PREVIOUS_RENT_NOTE],
+    );
+  }
+  const repairedAmounts = new Map(repairs.map((update) => [update.id, update.monthlyRent]));
+  const changes = loaded.map((change) =>
+    repairedAmounts.has(change.id) ? { ...change, monthlyRent: repairedAmounts.get(change.id)! } : change,
+  );
   const baseline = baselineRentChange({ rentStartDate, storedRent, changes });
   if (baseline) {
     await sql().query(
       `INSERT INTO rent_changes (flat_id, effective_month, monthly_rent, note)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (flat_id, effective_month) DO NOTHING`,
-      [flatId, baseline.effectiveMonth, baseline.monthlyRent, "Previous rent"],
+      [flatId, baseline.effectiveMonth, baseline.monthlyRent, PREVIOUS_RENT_NOTE],
     );
   }
-  const latest = [...changes, ...(baseline ? [baseline] : [])].sort((a, b) =>
-    a.effectiveMonth.localeCompare(b.effectiveMonth),
-  ).at(-1);
+  const latest = effectiveRentChanges([...changes, ...(baseline ? [{ ...baseline, note: PREVIOUS_RENT_NOTE }] : [])])
+    .sort((a, b) => a.effectiveMonth.localeCompare(b.effectiveMonth))
+    .at(-1);
   if (!latest) return;
   await sql().query(`UPDATE flats SET monthly_rent = $1 WHERE id = $2`, [latest.monthlyRent, flatId]);
 }
@@ -274,49 +287,88 @@ export async function deleteRentChange(actor: Actor, id: number): Promise<number
   }
 }
 
+function paymentValues(input: PaymentInput): unknown[] {
+  return [
+    input.flatId,
+    input.paymentDate,
+    input.amount,
+    input.notes,
+    input.forMonth,
+    input.forMonth != null,
+    input.method,
+    input.upiRef,
+    input.status,
+  ];
+}
+
 export async function insertPayment(actor: Actor, input: PaymentInput): Promise<number> {
   assertOwnFlat(actor, input.flatId);
   if (!actor.isAdmin && input.status !== "pending") {
     throw new AppError("Tenant payments stay pending until an admin confirms them.");
   }
-  const rows = await sql().query(
-    `INSERT INTO payments (flat_id, payment_date, amount, notes, for_month, method, upi_ref, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     RETURNING id`,
-    [
-      input.flatId,
-      input.paymentDate,
-      input.amount,
-      input.notes,
-      input.forMonth,
-      input.method,
-      input.upiRef,
-      input.status,
-    ],
-  );
-  return Number((rows[0] as { id: unknown }).id);
+  const values = paymentValues(input);
+  try {
+    const rows = await sql().query(
+      `INSERT INTO payments (flat_id, payment_date, amount, notes, for_month, for_month_explicit, method, upi_ref, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id`,
+      values,
+    );
+    return Number((rows[0] as { id: unknown }).id);
+  } catch (error) {
+    if (!missingColumn(error, "for_month_explicit")) throw error;
+    const rows = await sql().query(
+      `INSERT INTO payments (flat_id, payment_date, amount, notes, for_month, method, upi_ref, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id`,
+      [
+        input.flatId,
+        input.paymentDate,
+        input.amount,
+        input.notes,
+        input.forMonth,
+        input.method,
+        input.upiRef,
+        input.status,
+      ],
+    );
+    return Number((rows[0] as { id: unknown }).id);
+  }
 }
 
 export async function updatePayment(actor: Actor, id: number, input: PaymentInput): Promise<void> {
   assertAdmin(actor);
-  const rows = await sql().query(
-    `UPDATE payments
-     SET flat_id = $1, payment_date = $2, amount = $3, notes = $4, for_month = $5, method = $6, upi_ref = $7, status = $8
-     WHERE id = $9
-     RETURNING id`,
-    [
-      input.flatId,
-      input.paymentDate,
-      input.amount,
-      input.notes,
-      input.forMonth,
-      input.method,
-      input.upiRef,
-      input.status,
-      id,
-    ],
-  );
-  if (rows.length === 0) throw new AppError("That payment could not be found.");
+  try {
+    const rows = await sql().query(
+      `UPDATE payments
+       SET flat_id = $1, payment_date = $2, amount = $3, notes = $4, for_month = $5, for_month_explicit = $6, method = $7, upi_ref = $8, status = $9
+       WHERE id = $10
+       RETURNING id`,
+      [...paymentValues(input), id],
+    );
+    if (rows.length === 0) throw new AppError("That payment could not be found.");
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    if (!missingColumn(error, "for_month_explicit")) throw error;
+    const rows = await sql().query(
+      `UPDATE payments
+       SET flat_id = $1, payment_date = $2, amount = $3, notes = $4, for_month = $5, method = $6, upi_ref = $7, status = $8
+       WHERE id = $9
+       RETURNING id`,
+      [
+        input.flatId,
+        input.paymentDate,
+        input.amount,
+        input.notes,
+        input.forMonth,
+        input.method,
+        input.upiRef,
+        input.status,
+        id,
+      ],
+    );
+    if (rows.length === 0) throw new AppError("That payment could not be found.");
+  }
 }
 
 export async function setPaymentStatus(
